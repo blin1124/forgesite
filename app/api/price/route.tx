@@ -1,0 +1,18 @@
+import { NextResponse } from 'next/server'
+import Stripe from 'stripe'
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: '2024-06-20',
+})
+
+export async function GET() {
+  try {
+    const price = await stripe.prices.retrieve(process.env.STRIPE_PRICE_ID_MONTHLY!)
+    return NextResponse.json({ price: price.unit_amount / 100 }) // convert cents to dollars
+  } catch (err: any) {
+    console.error('Stripe price error:', err.message)
+    return NextResponse.json({ error: 'Failed to load price' }, { status: 500 })
+  }
+}
+
+

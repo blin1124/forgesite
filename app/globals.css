@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Optional: simple base background and font */
+body {
+  @apply bg-[#f9fafb] text-[#111827] font-sans;
+}
+
+/* === FIX: input text invisible / autofill issues === */
+input,
+textarea,
+select {
+  color: #ffffff !important;
+  caret-color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+}
+
+/* placeholders */
+input::placeholder,
+textarea::placeholder {
+  color: rgba(255, 255, 255, 0.75) !important;
+}
+
+/* Chrome autofill can override colors/background */
+input:-webkit-autofill,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-text-fill-color: #ffffff !important;
+  caret-color: #ffffff !important;
+  transition: background-color 9999s ease-in-out 0s;
+  box-shadow: 0 0 0px 1000px rgba(255, 255, 255, 0.18) inset !important;
+}
+
+
