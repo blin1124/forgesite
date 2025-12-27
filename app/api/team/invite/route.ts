@@ -26,29 +26,27 @@ export async function POST(req: Request) {
       return new NextResponse("Missing RESEND_API_KEY", { status: 500 })
     }
 
-    // Create a simple invite token row in Supabase (adjust table/fields if yours differ)
-    // Expected table example: team_invites(id uuid, team_id text, email text, token text, created_at)
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"
     const token = crypto.randomUUID()
 
-    const { error: inviteErr } = await supabaseAdmin
-      .from("team_invites")
-      .insert({
-        team_id: teamId,
-        email,
-        token,
-        inviter_name: inviterName,
-      })
+    // ✅ IMPORTANT: your supabaseAdmin is a FUNCTION — call it to get the client
+    const admin = supabaseAdmin()
+
+    const { error: inviteErr } = await admin.from("team_invites").insert({
+      team_id: teamId,
+      email,
+      token,
+      inviter_name: inviterName,
+    })
 
     if (inviteErr) {
       console.error("Supabase invite insert error:", inviteErr)
       return new NextResponse("Failed to create invite", { status: 500 })
     }
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"
     const acceptUrl = `${appUrl}/team/accept?token=${encodeURIComponent(token)}`
 
     const resend = new Resend(resendKey)
-
     const { error: emailErr } = await resend.emails.send({
       from: "Forgesite <no-reply@forgesite.ai>",
       to: [email],

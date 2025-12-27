@@ -1,59 +1,59 @@
-// lib/uploads/extract.ts
-import pdfParse from "pdf-parse";
-import { fileTypeFromBuffer } from "file-type";
+import type { FileTypeResult } from "file-type"
+import { fileTypeFromBuffer } from "file-type"
+import mammoth from "mammoth"
 
-export type ExtractedAttachment =
+// ✅ pdf-parse needs a CJS-safe import in Next/TS
+import * as pdfParseNS from "pdf-parse"
+
+type Extracted =
   | { kind: "text"; filename: string; mime: string; text: string }
-  | { kind: "image"; filename: string; mime: "image/png" | "image/jpeg"; dataUrl: string }
-  | { kind: "unsupported"; filename: string; mime: string; reason: string };
+  | { kind: "binary"; filename: string; mime: string; note: string }
 
-const MAX_BYTES = 8 * 1024 * 1024; // 8MB hard limit (keeps you safe + fast)
-
-function toDataUrl(mime: string, buf: Buffer) {
-  return `data:${mime};base64,${buf.toString("base64")}`;
+function asString(v: unknown) {
+  return typeof v === "string" ? v : ""
 }
 
-export async function extractAttachment(file: File): Promise<ExtractedAttachment> {
-  const filename = file.name || "upload";
-  const arrayBuf = await file.arrayBuffer();
+export async function extractFromUpload(buf: Buffer, filename: string): Promise<Extracted> {
+  const ft: FileTypeResult | undefined = await fileTypeFromBuffer(buf)
+  const mime = ft?.mime || "application/octet-stream"
+  const name = filename || "upload"
 
-  if (arrayBuf.byteLength > MAX_BYTES) {
+  // DOCX -> extract text
+  if (
+    mime ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    name.toLowerCase().endsWith(".docx")
+  ) {
+    const result = await mammoth.extractRawText({ buffer: buf })
+    const text = asString(result.value).trim()
     return {
-      kind: "unsupported",
-      filename,
-      mime: file.type || "application/octet-stream",
-      reason: `File too large. Max ${MAX_BYTES / (1024 * 1024)}MB.`,
-    };
+      kind: "text",
+      filename: name,
+      mime,
+      text: text || "(No extractable text found in DOCX.)",
+    }
   }
 
-  const buf = Buffer.from(arrayBuf);
-
-  // Trust sniffing more than browser-provided mimetype
-  const sniff = await fileTypeFromBuffer(buf);
-  const mime = (sniff?.mime || file.type || "application/octet-stream").toLowerCase();
-
-  // ---- PDFs -> extract text (chat can reference it)
-  if (mime === "application/pdf") {
-    const parsed = await pdfParse(buf);
-    const text = (parsed.text || "").trim();
-    return { kind: "text", filename, mime, text: text || "(No extractable text found in PDF.)" };
+  // PDF -> extract text
+  if (mime === "application/pdf" || name.toLowerCase().endsWith(".pdf")) {
+    // pdf-parse default export can be tricky; this works reliably:
+    const pdfParse = (pdfParseNS as any).default ?? (pdfParseNS as any)
+    const parsed = await pdfParse(buf)
+    const text = asString(parsed?.text).trim()
+    return {
+      kind: "text",
+      filename: name,
+      mime,
+      text: text || "(No extractable text found in PDF.)",
+    }
   }
 
-  // ---- PNG/JPEG -> pass to model as image (vision)
-  if (mime === "image/png" || mime === "image/jpeg") {
-    return { kind: "image", filename, mime: mime as any, dataUrl: toDataUrl(mime, buf) };
-  }
-
-  // ---- Basic “text-like” fallbacks (optional)
-  if (mime.startsWith("text/")) {
-    const text = buf.toString("utf8").slice(0, 200_000); // cap
-    return { kind: "text", filename, mime, text };
-  }
-
+  // fallback
   return {
-    kind: "unsupported",
-    filename,
+    kind: "binary",
+    filename: name,
     mime,
-    reason: "Unsupported file type. Allowed: PDF, PNG, JPG (plus plain text).",
-  };
+    note: "Unsupported file type for text extraction.",
+  }
 }
+

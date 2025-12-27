@@ -1,40 +1,40 @@
-'use client'
+"use client"
 
-import { useEffect } from 'react'
-import { useRouter } from 'next/navigation'
-import { supabaseBrowser } from '@/lib/supabase-browser'
+import { useEffect } from "react"
+import { useRouter } from "next/navigation"
+import { supabaseBrowser } from "@/lib/supabase-browser"
 
-export default function AuthCallback() {
+export default function CallbackPage() {
   const router = useRouter()
-  const sb = supabaseBrowser
 
   useEffect(() => {
-    const handleSession = async () => {
+    const run = async () => {
       try {
-        // get session info from the URL fragment after redirect
-        const { data, error } = await sb.auth.getSession()
-        if (error) throw error
+        const { data, error } = await supabaseBrowser.auth.getSession()
 
-        if (data?.session) {
-          console.log('✅ Logged in as:', data.session.user.email)
-          router.push('/') // redirect home (you can change this)
-        } else {
-          console.warn('⚠️ No session found')
-          router.push('/login')
+        if (error) {
+          console.error("Callback getSession error:", error.message)
+          router.push("/login")
+          return
         }
+
+        router.push(data?.session ? "/account" : "/login")
       } catch (err) {
-        console.error('❌ Auth callback error:', err)
-        router.push('/login')
+        console.error("Callback error:", err)
+        router.push("/login")
       }
     }
 
-    handleSession()
-  }, [router, sb])
+    run()
+  }, [router])
 
   return (
-    <div style={{ textAlign: 'center', marginTop: '100px' }}>
-      <h2>Logging you in...</h2>
-      <p>Please wait while we complete the authentication.</p>
-    </div>
+    <main className="mx-auto max-w-xl p-6">
+      <h1 className="text-xl font-semibold">Finishing sign-in…</h1>
+      <p className="mt-2 text-sm text-gray-600">
+        Please wait while we complete authentication.
+      </p>
+    </main>
   )
 }
+

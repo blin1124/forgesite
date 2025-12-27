@@ -1,82 +1,45 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { supabaseBrowser } from "@/lib/supabase-browser"
 
 export default function OpenAISettingsPage() {
-  const supabase = supabaseBrowser()
-  const [apiKey, setApiKey] = useState("")
-  const [status, setStatus] = useState<string | null>(null)
+  const router = useRouter()
+  const [loading, setLoading] = useState(true)
+  const [email, setEmail] = useState<string | null>(null)
 
   useEffect(() => {
-    const loadKey = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
-
-      if (!user) return
-
-      const { data } = await supabase
-        .from("user_settings")
-        .select("openai_api_key")
-        .eq("user_id", user.id)
-        .single()
-
-      if (data?.openai_api_key) {
-        setApiKey(data.openai_api_key)
+    const load = async () => {
+      const { data, error } = await supabaseBrowser.auth.getSession()
+      if (error || !data?.session) {
+        router.push("/login")
+        return
       }
+      setEmail(data.session.user.email ?? null)
+      setLoading(false)
     }
+    load()
+  }, [router])
 
-    loadKey()
-  }, [])
-
-  const saveKey = async () => {
-    setStatus(null)
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    if (!user) {
-      setStatus("Not authenticated")
-      return
-    }
-
-    const { error } = await supabase
-      .from("user_settings")
-      .upsert({
-        user_id: user.id,
-        openai_api_key: apiKey,
-      })
-
-    if (error) {
-      setStatus("Failed to save API key")
-    } else {
-      setStatus("API key saved")
-    }
+  if (loading) {
+    return (
+      <main className="mx-auto max-w-2xl p-6">
+        <p className="text-sm text-gray-600">Loading…</p>
+      </main>
+    )
   }
 
   return (
-    <div className="max-w-xl space-y-4 p-6">
-      <h1 className="text-xl font-semibold">OpenAI API Key</h1>
-
-      <input
-        type="password"
-        className="w-full rounded border px-3 py-2"
-        placeholder="sk-..."
-        value={apiKey}
-        onChange={(e) => setApiKey(e.target.value)}
-      />
-
-      <button
-        onClick={saveKey}
-        className="rounded bg-black px-4 py-2 text-white"
-      >
-        Save
-      </button>
-
-      {status && <p className="text-sm">{status}</p>}
-    </div>
+    <main className="mx-auto max-w-2xl p-6">
+      <h1 className="text-2xl font-semibold">OpenAI Settings</h1>
+      <p className="mt-2 text-sm text-gray-600">
+        Signed in as {email ?? "unknown user"}
+      </p>
+      <p className="mt-6 text-sm text-gray-700">
+        Manage your OpenAI key on the Account page.
+      </p>
+    </main>
   )
 }
 

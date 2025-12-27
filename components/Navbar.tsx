@@ -1,113 +1,93 @@
-"use client";
+"use client"
 
-import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase-browser";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
+import { supabaseBrowser } from "@/lib/supabase-browser"
 
 export default function Navbar() {
-  const [hydrated, setHydrated] = useState(false);
-  const [user, setUser] = useState<any>(null);
-  const router = useRouter();
+  const router = useRouter()
+  const [email, setEmail] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
 
-  // Prevent hydration mismatch
   useEffect(() => {
-    setHydrated(true);
-  }, []);
+    const load = async () => {
+      setLoading(true)
+      const { data } = await supabaseBrowser.auth.getSession()
+      setEmail(data?.session?.user?.email ?? null)
+      setLoading(false)
+    }
 
-  // Load user ONLY after hydration
-  useEffect(() => {
-    if (!hydrated) return;
+    load()
 
-    supabase.auth.getUser().then(({ data }) => {
-      setUser(data.user || null);
-    });
-  }, [hydrated]);
+    const { data: sub } = supabaseBrowser.auth.onAuthStateChange(() => {
+      load()
+    })
 
-  // ⛔️ On server, render nothing → eliminates mismatch
-  if (!hydrated) return null;
+    return () => {
+      sub?.subscription?.unsubscribe()
+    }
+  }, [])
+
+  const go = (path: string) => router.push(path)
+
+  const signOut = async () => {
+    await supabaseBrowser.auth.signOut()
+    router.push("/login")
+  }
 
   return (
-    <nav
-      style={{
-        width: "100%",
-        padding: "1rem 2rem",
-        background: "rgba(255, 255, 255, 0.15)",
-        backdropFilter: "blur(12px)",
-        borderBottom: "1px solid rgba(255,255,255,0.25)",
-        color: "white",
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        position: "sticky",
-        top: 0,
-        zIndex: 999,
-      }}
-    >
-      {/* LOGO */}
-      <div
-        style={{ fontSize: "1.6rem", fontWeight: "800", cursor: "pointer" }}
-        onClick={() => router.push("/")}
-      >
-        ForgeSite
+    <header className="w-full border-b">
+      <div className="mx-auto flex max-w-6xl items-center justify-between p-4">
+        <div className="flex items-center gap-4">
+          <button
+            onClick={() => go("/")}
+            className="text-sm font-semibold"
+            type="button"
+          >
+            Forgesite
+          </button>
+
+          <nav className="flex items-center gap-3 text-sm text-gray-700">
+            <button onClick={() => go("/account")} type="button">
+              Account
+            </button>
+            <button onClick={() => go("/settings/openai")} type="button">
+              OpenAI
+            </button>
+            <button onClick={() => go("/billing")} type="button">
+              Billing
+            </button>
+          </nav>
+        </div>
+
+        <div className="flex items-center gap-3">
+          {loading ? (
+            <span className="text-sm text-gray-500">Loading…</span>
+          ) : email ? (
+            <>
+              <span className="text-sm text-gray-700">{email}</span>
+              <button
+                onClick={signOut}
+                className="rounded bg-black px-3 py-2 text-sm text-white"
+                type="button"
+              >
+                Sign out
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => go("/login")}
+              className="rounded bg-black px-3 py-2 text-sm text-white"
+              type="button"
+            >
+              Log in
+            </button>
+          )}
+        </div>
       </div>
-
-      {/* BUTTONS */}
-      <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
-        {!user && (
-          <>
-            <button onClick={() => router.push("/login")} style={buttonStyle}>
-              Login
-            </button>
-
-            <button
-              onClick={() => router.push("/signup")}
-              style={{ ...buttonStyle, background: "white", color: "#6a5af9" }}
-            >
-              Sign Up
-            </button>
-          </>
-        )}
-
-        {user && (
-          <>
-            <span style={{ opacity: 0.8 }}>{user.email}</span>
-
-            <button
-              onClick={() => router.push("/builder")}
-              style={{ ...buttonStyle, background: "white", color: "#6a5af9" }}
-            >
-              Builder
-            </button>
-
-            <button
-              onClick={async () => {
-                await supabase.auth.signOut();
-                router.push("/login");
-              }}
-              style={{
-                ...buttonStyle,
-                background: "rgba(255,50,50,0.9)",
-                border: "1px solid rgba(255,255,255,0.4)",
-              }}
-            >
-              Logout
-            </button>
-          </>
-        )}
-      </div>
-    </nav>
-  );
+    </header>
+  )
 }
-
-const buttonStyle: React.CSSProperties = {
-  padding: "0.5rem 1.2rem",
-  borderRadius: "10px",
-  background: "rgba(255,255,255,0.25)",
-  color: "white",
-  border: "1px solid rgba(255,255,255,0.4)",
-  cursor: "pointer",
-  fontWeight: 600,
-};
 
 
 

@@ -1,35 +1,42 @@
-'use client'
+"use client"
 
-import { useEffect } from 'react'
-import { useRouter } from 'next/navigation'
-import { supabaseBrowser } from '@/lib/supabase-browser'
+import { useEffect } from "react"
+import { useRouter } from "next/navigation"
+import { supabaseBrowser } from "@/lib/supabase-browser"
 
-export default function AuthCallback() {
+export default function AuthCallbackPage() {
   const router = useRouter()
 
   useEffect(() => {
-    const handleAuth = async () => {
-      const { data, error } = await supabaseBrowser.auth.getSession()
-      if (error) {
-        console.error('Error fetching session:', error.message)
-        router.push('/login')
-        return
-      }
+    const run = async () => {
+      try {
+        const { error } = await supabaseBrowser.auth.getSession()
 
-      if (data?.session) {
-        console.log('User session:', data.session)
-        router.push('/builder') // 👈 redirect to main page after login
-      } else {
-        router.push('/login')
+        if (error) {
+          console.error("Error fetching session:", error.message)
+          router.push("/login")
+          return
+        }
+
+        router.push("/account")
+      } catch (err) {
+        console.error("Auth callback error:", err)
+        router.push("/login")
       }
     }
 
-    handleAuth()
+    run()
   }, [router])
 
   return (
-    <div className="flex items-center justify-center h-screen">
-      <h2 className="text-lg font-semibold text-gray-700">Signing you in...</h2>
-    </div>
+    <main className="mx-auto max-w-xl p-6">
+      <h1 className="text-xl font-semibold">Signing you in…</h1>
+      <p className="mt-2 text-sm text-gray-600">
+        Please wait while we complete authentication.
+      </p>
+    </main>
   )
 }
+
+
+
