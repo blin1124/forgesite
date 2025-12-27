@@ -1,106 +1,101 @@
-import { NextResponse } from "next/server";
-import Stripe from "stripe";
-import { stripe } from "@/lib/stripe";
-import { supabaseAdmin } from "@/lib/supabase/admin";
+export const runtime = "nodejs"
 
-export const runtime = "nodejs";
+import Stripe from "stripe"
+import { NextResponse } from "next/server"
 
-async function updateProfileSubscription(params: {
-  userId: string;
-  status: string;
-  currentPeriodEnd: string | null;
-}) {
-  // Update ONLY columns that exist in your table.
-  // From your screenshot you have:
-  // - current_period_end
-  // - subscription_current_period_end
-  // (You can add subscription_status later, but this will work now.)
-  const { error } = await supabaseAdmin
-    .from("profiles")
-    .update({
-      current_period_end: params.currentPeriodEnd,
-      subscription_current_period_end: params.currentPeriodEnd,
-      // If you add subscription_status column later, uncomment this:
-      // subscription_status: params.status,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", params.userId);
+const stripeSecret = process.env.STRIPE_SECRET_KEY
+const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET
 
-  if (error) throw error;
-}
+const stripe = stripeSecret
+  ? new Stripe(stripeSecret, { apiVersion: "2025-12-15.clover" })
+  : null
 
-async function findUserIdFromCustomer(customerId: string) {
-  // Your checkout code stores stripe_customer_id in profiles
-  const { data, error } = await supabaseAdmin
-    .from("profiles")
-    .select("id")
-    .eq("stripe_customer_id", customerId)
-    .maybeSingle();
-
-  if (error) throw error;
-  return data?.id ?? null;
+function isStripeCustomer(
+  customer: Stripe.Checkout.Session["customer"]
+): customer is Stripe.Customer {
+  return !!customer && typeof customer === "object" && "email" in customer
 }
 
 export async function POST(req: Request) {
-  const sig = req.headers.get("stripe-signature");
-  if (!sig) return NextResponse.json({ error: "Missing stripe-signature" }, { status: 400 });
-
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-  if (!webhookSecret) {
-    return NextResponse.json({ error: "Missing STRIPE_WEBHOOK_SECRET" }, { status: 500 });
-  }
-
-  const body = await req.text();
-
-  let event: Stripe.Event;
   try {
-    event = stripe.webhooks.constructEvent(body, sig, webhookSecret);
-  } catch (err: any) {
-    return NextResponse.json({ error: `Webhook Error: ${err.message}` }, { status: 400 });
-  }
+    if (!stripe) return new NextResponse("Missing STRIPE_SECRET_KEY", { status: 500 })
+    if (!webhookSecret) return new NextResponse("Missing STRIPE_WEBHOOK_SECRET", { status: 500 })
 
-  try {
-    // We mainly care about subscription lifecycle events
-    if (
-      event.type === "customer.subscription.created" ||
-      event.type === "customer.subscription.updated" ||
-      event.type === "customer.subscription.deleted"
-    ) {
-      const sub = event.data.object as Stripe.Subscription;
+    const rawBody = await req.text()
+    const signature = req.headers.get("stripe-signature")
+    if (!signature) return new NextResponse("Missing stripe-signature header", { status: 400 })
 
-      const customerId = sub.customer as string;
-      const status = sub.status ?? "canceled";
-      const currentPeriodEnd = sub.current_period_end
-        ? new Date(sub.current_period_end * 1000).toISOString()
-        : null;
+    let event: Stripe.Event
+    try {
+      event = stripe.webhooks.constructEvent(rawBody, signature, webhookSecret)
+    } catch (err: any) {
+      console.error("Webhook signature verification failed:", err?.message || err)
+      return new NextResponse("Invalid signature", { status: 400 })
+    }
 
-      // Best: metadata (if you set it)
-      const userIdFromMeta = (sub.metadata?.supabase_user_id || sub.metadata?.user_id) ?? null;
+    switch (event.type) {
+      case "checkout.session.completed": {
+        const session = event.data.object as Stripe.Checkout.Session
 
-      // Fallback: lookup by stripe_customer_id in profiles
-      const userId = userIdFromMeta || (await findUserIdFromCustomer(customerId));
+        const email =
+          session.customer_details?.email ||
+          session.customer_email ||
+          (isStripeCustomer(session.customer) ? session.customer.email : null)
 
-      if (!userId) {
-        // If you hit this, your checkout route isn't saving stripe_customer_id into profiles
-        console.warn("Webhook: could not map customer to user", { customerId });
-        return NextResponse.json({ received: true, mapped: false });
+        const customerId =
+          typeof session.customer === "string"
+            ? session.customer
+            : session.customer?.id
+
+        const subscriptionId =
+          typeof session.subscription === "string"
+            ? session.subscription
+            : session.subscription?.id
+
+        console.log("checkout.session.completed", {
+          email,
+          customerId,
+          subscriptionId,
+          mode: session.mode,
+          payment_status: session.payment_status,
+        })
+
+        return NextResponse.json({ received: true })
       }
 
-      await updateProfileSubscription({ userId, status, currentPeriodEnd });
+      case "customer.subscription.created":
+      case "customer.subscription.updated":
+      case "customer.subscription.deleted": {
+        const sub = event.data.object as Stripe.Subscription
 
-      return NextResponse.json({ received: true, mapped: true });
+        const customerId =
+          typeof sub.customer === "string" ? sub.customer : sub.customer.id
+
+        const status = sub.status
+
+        // ✅ FIX: do NOT access sub.current_period_end directly (typing mismatch)
+        const currentPeriodEnd =
+          typeof (sub as any).current_period_end === "number"
+            ? new Date(((sub as any).current_period_end as number) * 1000).toISOString()
+            : null
+
+        console.log(event.type, {
+          customerId,
+          status,
+          currentPeriodEnd,
+          cancel_at_period_end: sub.cancel_at_period_end,
+        })
+
+        return NextResponse.json({ received: true })
+      }
+
+      default:
+        console.log("Unhandled Stripe event:", event.type)
+        return NextResponse.json({ received: true })
     }
-
-    // Also handle checkout completed if you want (optional)
-    if (event.type === "checkout.session.completed") {
-      // Usually subscription.updated comes right after anyway
-      return NextResponse.json({ received: true });
-    }
-
-    return NextResponse.json({ received: true });
-  } catch (err: any) {
-    console.error("Webhook handler error:", err);
-    return NextResponse.json({ error: "Webhook handler failed" }, { status: 500 });
+  } catch (err) {
+    console.error("Stripe webhook handler error:", err)
+    return new NextResponse("Server error", { status: 500 })
   }
 }
 

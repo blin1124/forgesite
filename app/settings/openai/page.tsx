@@ -1,149 +1,83 @@
-"use client";
+"use client"
 
-import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase-browser";
+import { useEffect, useState } from "react"
+import { supabaseBrowser } from "@/lib/supabase-browser"
 
 export default function OpenAISettingsPage() {
-  const [loading, setLoading] = useState(true);
-  const [isAuthed, setIsAuthed] = useState(false);
-
-  const [apiKey, setApiKey] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const supabase = supabaseBrowser()
+  const [apiKey, setApiKey] = useState("")
+  const [status, setStatus] = useState<string | null>(null)
 
   useEffect(() => {
-    let mounted = true;
+    const loadKey = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
 
-    async function init() {
-      // 1) Get current session
-      const { data, error } = await supabase.auth.getSession();
+      if (!user) return
 
-      if (!mounted) return;
+      const { data } = await supabase
+        .from("user_settings")
+        .select("openai_api_key")
+        .eq("user_id", user.id)
+        .single()
 
-      if (error) {
-        console.error("getSession error:", error);
-        setIsAuthed(false);
-      } else {
-        setIsAuthed(!!data.session);
+      if (data?.openai_api_key) {
+        setApiKey(data.openai_api_key)
       }
-
-      setLoading(false);
     }
 
-    init();
+    loadKey()
+  }, [])
 
-    // 2) Keep UI in sync if user logs in/out
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      setIsAuthed(!!session);
-    });
+  const saveKey = async () => {
+    setStatus(null)
 
-    return () => {
-      mounted = false;
-      sub.subscription.unsubscribe();
-    };
-  }, []);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
 
-  async function onSave() {
-    setMessage(null);
-
-    if (!isAuthed) {
-      setMessage("You must be logged in.");
-      return;
+    if (!user) {
+      setStatus("Not authenticated")
+      return
     }
 
-    if (!apiKey.trim()) {
-      setMessage("Paste an OpenAI API key first.");
-      return;
-    }
+    const { error } = await supabase
+      .from("user_settings")
+      .upsert({
+        user_id: user.id,
+        openai_api_key: apiKey,
+      })
 
-    setSaving(true);
-    try {
-      const { data: sessionData, error: sessionErr } =
-        await supabase.auth.getSession();
-
-      if (sessionErr || !sessionData.session) {
-        setMessage("Session not found. Please log in again.");
-        return;
-      }
-
-      // NOTE: This endpoint should already exist in your app.
-      // Step 4.1 is only about using the shared supabase client + auth session.
-      const res = await fetch("/api/user/openai-key", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${sessionData.session.access_token}`,
-        },
-        body: JSON.stringify({ apiKey }),
-      });
-
-      const json = await res.json().catch(() => null);
-
-      if (!res.ok) {
-        setMessage(json?.error || "Failed to save key.");
-        return;
-      }
-
-      setApiKey("");
-      setMessage("Saved!");
-    } catch (e: any) {
-      console.error(e);
-      setMessage("Unexpected error saving key.");
-    } finally {
-      setSaving(false);
+    if (error) {
+      setStatus("Failed to save API key")
+    } else {
+      setStatus("API key saved")
     }
   }
 
   return (
-    <div style={{ padding: 24, maxWidth: 720 }}>
-      <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 8 }}>
-        OpenAI API Key
-      </h1>
-
-      <p style={{ marginBottom: 16 }}>
-        Paste your OpenAI API key below. It is encrypted before storage.
-      </p>
+    <div className="max-w-xl space-y-4 p-6">
+      <h1 className="text-xl font-semibold">OpenAI API Key</h1>
 
       <input
+        type="password"
+        className="w-full rounded border px-3 py-2"
+        placeholder="sk-..."
         value={apiKey}
         onChange={(e) => setApiKey(e.target.value)}
-        placeholder="sk-..."
-        style={{
-          width: "100%",
-          padding: 12,
-          border: "1px solid #ccc",
-          borderRadius: 6,
-          marginBottom: 12,
-        }}
-        disabled={loading || saving}
       />
 
       <button
-        onClick={onSave}
-        disabled={loading || saving}
-        style={{
-          padding: "10px 16px",
-          borderRadius: 6,
-          border: "none",
-          cursor: loading || saving ? "not-allowed" : "pointer",
-          opacity: loading || saving ? 0.6 : 1,
-        }}
+        onClick={saveKey}
+        className="rounded bg-black px-4 py-2 text-white"
       >
-        {saving ? "Saving..." : "Save API Key"}
+        Save
       </button>
 
-      <div style={{ marginTop: 12 }}>
-        {loading ? (
-          <div>Checking login...</div>
-        ) : !isAuthed ? (
-          <div style={{ color: "#111" }}>You must be logged in.</div>
-        ) : message ? (
-          <div style={{ color: message === "Saved!" ? "green" : "#111" }}>
-            {message}
-          </div>
-        ) : null}
-      </div>
+      {status && <p className="text-sm">{status}</p>}
     </div>
-  );
+  )
 }
+
 

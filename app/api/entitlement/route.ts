@@ -1,25 +1,68 @@
-import { NextRequest, NextResponse } from 'next/server'
-import Stripe from 'stripe'
-import { supabaseAdmin } from '@/lib/supabase'
-export const runtime = 'nodejs'
+export const runtime = "nodejs"
 
-export async function GET(req: NextRequest) {
+import Stripe from "stripe"
+import { NextResponse } from "next/server"
+
+function isStripeCustomer(
+  customer: Stripe.Checkout.Session["customer"]
+): customer is Stripe.Customer {
+  return !!customer && typeof customer === "object" && "email" in customer
+}
+
+export async function POST(req: Request) {
   try {
-    const session_id = req.nextUrl.searchParams.get('session_id')
-    if (!session_id) return new NextResponse('Missing session_id', { status: 400 })
+    const body = await req.json()
+    const { session_id } = body
+
+    if (!session_id) {
+      return new NextResponse("Missing session_id", { status: 400 })
+    }
+
     const stripeSecret = process.env.STRIPE_SECRET_KEY
-    if (!stripeSecret) return new NextResponse('Missing STRIPE_SECRET_KEY', { status: 500 })
-    const stripe = new Stripe(stripeSecret, { apiVersion: '2024-06-20' })
-    const session = await stripe.checkout.sessions.retrieve(session_id)
-    const email = session.customer_details?.email || session.customer_email
-    if (!email) return new NextResponse('No email on session', { status: 400 })
-    const supa = supabaseAdmin()
-    const { data, error } = await supa.from('entitlements').select('*').eq('email', email).maybeSingle()
-    if (error) return new NextResponse('DB error', { status: 500 })
-    const active = !!(data && ['active','trialing','past_due'].includes(data.status) && (!data.current_period_end || new Date(data.current_period_end) > new Date()))
-    if (!active) return new NextResponse('No active subscription found', { status: 403 })
-    return NextResponse.json({ ok: true, email })
-  } catch (e:any) {
-    return new NextResponse(e.message || 'Server error', { status: 500 })
+    if (!stripeSecret) {
+      return new NextResponse("Missing STRIPE_SECRET_KEY", { status: 500 })
+    }
+
+    const stripe = new Stripe(stripeSecret, {
+      apiVersion: "2025-12-15.clover",
+    })
+
+    const session = await stripe.checkout.sessions.retrieve(session_id, {
+      expand: ["line_items", "customer"],
+    })
+
+    const email =
+      session.customer_details?.email ||
+      session.customer_email ||
+      (isStripeCustomer(session.customer) ? session.customer.email : null)
+
+    if (!email) {
+      return new NextResponse("No email on session", { status: 400 })
+    }
+
+    const hasPaid =
+      session.payment_status === "paid" || session.status === "complete"
+
+    if (!hasPaid) {
+      return new NextResponse("Payment not completed", { status: 403 })
+    }
+
+    return NextResponse.json({
+      email,
+      customerId:
+        typeof session.customer === "string"
+          ? session.customer
+          : session.customer?.id,
+      subscriptionId:
+        typeof session.subscription === "string"
+          ? session.subscription
+          : session.subscription?.id,
+      mode: session.mode,
+    })
+  } catch (err) {
+    console.error("Entitlement error:", err)
+    return new NextResponse("Internal server error", { status: 500 })
   }
 }
+
+
