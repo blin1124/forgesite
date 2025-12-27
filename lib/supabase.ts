@@ -56,3 +56,4 @@ export function supabaseAdmin(): SupabaseClient {
  */
 export default supabaseAnon;
 
+
