@@ -1,20 +1,58 @@
-// lib/supabase.ts
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+
+function required(name: string, value: string | undefined) {
+  if (!value) {
+    throw new Error(`Missing ${name} environment variable`);
+  }
+  return value;
+}
 
 /**
- * Server-side Supabase client using the Service Role key.
- * Use ONLY in server code (Route Handlers, Server Actions).
+ * Public (anon) client — safe for read-only / RLS-protected operations.
+ * Use this in server routes when you only need anon access.
  */
-const supabaseUrl =
-  process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+export function supabaseAnon(): SupabaseClient {
+  const url =
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.SUPABASE_URL;
 
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const anon =
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.SUPABASE_ANON_KEY;
 
-if (!supabaseUrl) {
-  throw new Error(
-    "Missing SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL) environment variable."
+  return createClient(
+    required("NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL)", url),
+    required("NEXT_PUBLIC_SUPABASE_ANON_KEY (or SUPABASE_ANON_KEY)", anon),
+    {
+      auth: { persistSession: false },
+    }
   );
 }
 
-if (!serviceRoleKey) {
-  throw new Error("Missing SUPABASE_SERVICE
+/**
+ * Admin client (service role) — server-only. NEVER expose this to the browser.
+ * Use this in API routes that must bypass RLS (billing, provisioning, etc).
+ */
+export function supabaseAdmin(): SupabaseClient {
+  const url =
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.SUPABASE_URL;
+
+  const serviceRole =
+    process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  return createClient(
+    required("NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL)", url),
+    required("SUPABASE_SERVICE_ROLE_KEY", serviceRole),
+    {
+      auth: { persistSession: false },
+    }
+  );
+}
+
+/**
+ * Backwards-compatible default export (if any of your code imports default).
+ * Prefer using supabaseAnon() or supabaseAdmin() explicitly.
+ */
+export default supabaseAnon;
+
