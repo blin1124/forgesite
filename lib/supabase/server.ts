@@ -12,11 +12,11 @@ export function supabaseServer() {
         get(name: string) {
           return cookieStore.get(name)?.value;
         },
-        set() {
-          // no-op in server components
+        set(name: string, value: string, options: any) {
+          cookieStore.set({ name, value, ...options });
         },
-        remove() {
-          // no-op in server components
+        remove(name: string, options: any) {
+          cookieStore.set({ name, value: "", ...options, maxAge: 0 });
         },
       },
     }
