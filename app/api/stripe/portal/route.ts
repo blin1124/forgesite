@@ -1,55 +1,63 @@
+// app/api/stripe/portal/route.ts
 import { NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
 import { supabaseServer } from "@/lib/supabase/server";
-import { supabaseAdmin } from "@/lib/supabase/admin";
-
-function getAppUrl(req: Request) {
-  return process.env.NEXT_PUBLIC_APP_URL || new URL(req.url).origin;
-}
-
-export const runtime = "nodejs";
+import { supabaseAdmin } from "@/lib/supabase";
 
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const returnTo = typeof body?.returnTo === "string" ? body.returnTo : "/billing";
+    const returnUrl =
+      body?.returnUrl ||
+      process.env.NEXT_PUBLIC_APP_URL ||
+      process.env.NEXT_PUBLIC_SITE_URL ||
+      "http://localhost:3000/billing";
 
     const supabase = supabaseServer();
-    const { data: auth } = await supabase.auth.getUser();
-    const user = auth?.user;
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser();
 
-    if (!user) {
-      return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+    if (error || !user) {
+      return new NextResponse("Unauthorized", { status: 401 });
     }
 
-    // Get Stripe customer from stripe_customers (this matches your webhook setup)
-    const { data: row, error } = await supabaseAdmin
-      .from("stripe_customers")
+    // Find stripe_customer_id (profiles first, then billing)
+    let customerId: string | null = null;
+
+    const prof = await supabaseAdmin
+      .from("profiles")
       .select("stripe_customer_id")
-      .eq("user_id", user.id)
+      .eq("id", user.id)
       .maybeSingle();
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+    customerId = prof.data?.stripe_customer_id ?? null;
 
-    const customerId = row?.stripe_customer_id;
     if (!customerId) {
-      return NextResponse.json(
-        { error: "No Stripe customer yet. Click Subscribe first." },
-        { status: 400 }
-      );
+      const bill = await supabaseAdmin
+        .from("billing")
+        .select("stripe_customer_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      customerId = bill.data?.stripe_customer_id ?? null;
     }
 
-    const portal = await stripe.billingPortal.sessions.create({
+    if (!customerId) {
+      return new NextResponse("No Stripe customer found for user", { status: 400 });
+    }
+
+    const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
-      return_url: `${getAppUrl(req)}${returnTo}`,
+      return_url: returnUrl,
     });
 
-    return NextResponse.json({ url: portal.url });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Portal error" }, { status: 500 });
+    return NextResponse.json({ url: session.url });
+  } catch (err: any) {
+    return new NextResponse(err?.message || "Portal error", { status: 500 });
   }
 }
+
 
 
