@@ -1,79 +1,65 @@
-// app/api/generate/route.ts
 import OpenAI from "openai";
 
-export const runtime = "nodejs";
-
-/**
- * /api/generate
- * - BYOK (Bring Your Own Key)
- * - Expects: { apiKey: string, prompt: string }
- * - Returns: { html: string }
- * - This route ONLY generates HTML
- */
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => ({}));
+    const body = await req.json();
+    const apiKey = body.apiKey as string | undefined;
+    const prompt = body.prompt as string | undefined;
 
-    const apiKey =
-      typeof body?.apiKey === "string" ? body.apiKey.trim() : "";
-    const prompt =
-      typeof body?.prompt === "string" ? body.prompt.trim() : "";
-
-    if (!apiKey || !apiKey.startsWith("sk-")) {
+    if (!apiKey) {
       return Response.json(
-        { error: "Missing or invalid OpenAI API key." },
+        { error: "Missing apiKey. Paste your OpenAI key into the Builder page." },
         { status: 400 }
       );
     }
 
-    if (!prompt) {
-      return Response.json(
-        { error: "Missing prompt" },
-        { status: 400 }
-      );
+    if (!prompt?.trim()) {
+      return Response.json({ error: "Missing prompt" }, { status: 400 });
     }
 
     const client = new OpenAI({ apiKey });
 
-    const systemPrompt = [
+    const system = [
       "You are a website generator.",
-      "Return ONLY raw HTML.",
-      "Do NOT use markdown.",
-      "Do NOT wrap in backticks.",
-      "The response MUST start with <html> and end with </html>.",
+      "Return ONLY valid HTML (no markdown, no backticks).",
+      "Must start with <html> and end with </html>.",
       "Include <head> and <body>.",
-      "Use inline CSS only (no external files).",
-      "Images must use full https URLs.",
+      "Use clean, modern, responsive styling with inline CSS in <style>.",
+      "If the prompt includes an IMAGE URL, use it with <img src='...'> (do not invent other URLs).",
+      "If the prompt includes a PDF URL, add a 'Documents' section with:",
+      " - a 'View PDF' link (target=_blank)",
+      " - a 'Download PDF' link (download attribute if possible)",
+      " - a preview using <object data='PDF_URL' type='application/pdf'> with a fallback message + link if embedding fails.",
+      "Do NOT use an <iframe> for PDF preview; prefer <object> or <embed>.",
     ].join(" ");
 
-    const completion = await client.chat.completions.create({
+    const resp = await client.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: system },
         { role: "user", content: prompt },
       ],
       temperature: 0.7,
     });
 
-    const html =
-      completion.choices?.[0]?.message?.content?.trim() || "";
+    const html = resp.choices?.[0]?.message?.content?.trim() || "";
 
     if (!html.startsWith("<html")) {
       return Response.json(
-        { error: "Model did not return valid HTML." },
+        { error: "Model did not return raw HTML. Try again or tighten the prompt." },
         { status: 500 }
       );
     }
 
     return Response.json({ html });
   } catch (err: any) {
-    console.error("GENERATE_ROUTE_ERROR:", err);
     return Response.json(
       { error: err?.message || "Server error in /api/generate" },
       { status: 500 }
     );
   }
 }
+
 
 
 
