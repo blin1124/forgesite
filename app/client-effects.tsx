@@ -15,3 +15,4 @@ export default function ClientEffects() {
   // ✅ IMPORTANT: render nothing so server/client markup matches
   return null;
 }
+
