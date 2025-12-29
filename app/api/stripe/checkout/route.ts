@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import Stripe from "stripe";
 import { stripe } from "@/lib/stripe";
 import { supabaseServer } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
@@ -7,36 +8,67 @@ export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   try {
-    const { next } = await req.json().catch(() => ({ next: "/builder" }));
+    // Parse input safely
+    const body = await req.json().catch(() => ({}));
+    const next = typeof body?.next === "string" && body.next.trim() ? body.next : "/builder";
 
-    // Authenticated user (cookie-based)
+    // Must be logged in
     const supabase = supabaseServer();
-    const { data: auth, error: authErr } = await supabase.auth.getUser();
+    const { data: authData, error: authErr } = await supabase.auth.getUser();
     if (authErr) {
       return NextResponse.json({ error: authErr.message }, { status: 401 });
     }
-    const user = auth?.user;
-    if (!user) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
+    const user = authData?.user;
+    if (!user) {
+      return NextResponse.json({ error: "Not logged in" }, { status: 401 });
+    }
 
-    // Price ID required
+    // Env checks
     const priceId = process.env.STRIPE_PRICE_ID;
     if (!priceId) {
-      return NextResponse.json({ error: "Missing STRIPE_PRICE_ID" }, { status: 500 });
+      return NextResponse.json(
+        { error: "Missing STRIPE_PRICE_ID in .env.local" },
+        { status: 500 }
+      );
     }
 
-    // Get/create Stripe customer using PROFILES (matches your middleware gating)
-    const { data: profile, error: profErr } = await supabaseAdmin
-      .from("profiles")
+    // HARD VERIFY price exists in the same Stripe mode as your secret key
+    // This prevents the “No such price” guessing game.
+    try {
+      const price = await stripe.prices.retrieve(priceId);
+      if (!price || price.deleted) {
+        return NextResponse.json(
+          { error: `Stripe price not found or deleted: ${priceId}` },
+          { status: 500 }
+        );
+      }
+    } catch (e: any) {
+      // This is the exact error you were seeing. Now it returns a clear response.
+      return NextResponse.json(
+        {
+          error:
+            `Stripe cannot retrieve STRIPE_PRICE_ID="${priceId}". ` +
+            `This almost always means your STRIPE_SECRET_KEY is in a different mode/account than the price. ` +
+            `Details: ${e?.message || "Unknown Stripe error"}`,
+        },
+        { status: 500 }
+      );
+    }
+
+    // Find existing mapping in stripe_customers (this is what your webhook uses)
+    const { data: existing, error: existingErr } = await supabaseAdmin
+      .from("stripe_customers")
       .select("stripe_customer_id")
-      .eq("id", user.id)
+      .eq("user_id", user.id)
       .maybeSingle();
 
-    if (profErr) {
-      return NextResponse.json({ error: profErr.message }, { status: 500 });
+    if (existingErr) {
+      return NextResponse.json({ error: existingErr.message }, { status: 500 });
     }
 
-    let customerId = profile?.stripe_customer_id ?? null;
+    let customerId = existing?.stripe_customer_id ?? null;
 
+    // Create Stripe customer if needed
     if (!customerId) {
       const customer = await stripe.customers.create({
         email: user.email || undefined,
@@ -45,28 +77,38 @@ export async function POST(req: Request) {
 
       customerId = customer.id;
 
-      const { error: upsertErr } = await supabaseAdmin
-        .from("profiles")
-        .upsert({
-          id: user.id,
+      const { error: insErr } = await supabaseAdmin
+        .from("stripe_customers")
+        .insert({
+          user_id: user.id,
           stripe_customer_id: customerId,
-          updated_at: new Date().toISOString(),
+          email: user.email || null,
         });
 
-      if (upsertErr) {
-        return NextResponse.json({ error: upsertErr.message }, { status: 500 });
+      if (insErr) {
+        return NextResponse.json(
+          { error: `Failed to insert stripe_customers row: ${insErr.message}` },
+          { status: 500 }
+        );
       }
+
+      // Optional: also store on profiles if you want
+      await supabaseAdmin.from("profiles").upsert({
+        id: user.id,
+        stripe_customer_id: customerId,
+        updated_at: new Date().toISOString(),
+      });
     }
 
+    // Create Checkout session
     const origin = new URL(req.url).origin;
-    const safeNext = typeof next === "string" && next.length > 0 ? next : "/builder";
 
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customerId,
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${origin}/billing?success=1&next=${encodeURIComponent(safeNext)}`,
-      cancel_url: `${origin}/billing?canceled=1&next=${encodeURIComponent(safeNext)}`,
+      success_url: `${origin}/billing?success=1&next=${encodeURIComponent(next)}`,
+      cancel_url: `${origin}/billing?canceled=1&next=${encodeURIComponent(next)}`,
       allow_promotion_codes: true,
       subscription_data: {
         metadata: { supabase_user_id: user.id },
@@ -75,7 +117,10 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ url: session.url });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Checkout error" }, { status: 500 });
+    return NextResponse.json(
+      { error: e?.message || "Checkout error" },
+      { status: 500 }
+    );
   }
 }
 
