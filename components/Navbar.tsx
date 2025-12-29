@@ -51,8 +51,8 @@ export default function Navbar() {
             <button onClick={() => go("/account")} type="button">
               Account
             </button>
-            <button onClick={() => go("/settings/openai")} type="button">
-              OpenAI
+            <button onClick={() => go("/settings")} type="button">
+              Settings
             </button>
             <button onClick={() => go("/billing")} type="button">
               Billing
@@ -88,6 +88,7 @@ export default function Navbar() {
     </header>
   )
 }
+
 
 
 
