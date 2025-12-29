@@ -9,5 +9,14 @@ export function supabaseRoute() {
   return createSupabaseServerClient();
 }
 
+/**
+ * Back-compat helper for older imports that expect:
+ * import { supabaseServer } from "@/lib/supabase-server"
+ */
+export function supabaseServer() {
+  return createSupabaseServerClient();
+}
+
+
 
 
