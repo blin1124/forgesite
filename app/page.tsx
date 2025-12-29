@@ -83,8 +83,10 @@ export default function HomePage() {
               Get an OpenAI API key →
             </a>
 
+            {/* ✅ THIS IS THE FIX: always go to billing first */}
             <Link
-              href="/builder"
+              href="/billing"
+              prefetch={false}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -101,9 +103,13 @@ export default function HomePage() {
               Go to Builder →
             </Link>
           </div>
+
+          <p style={{ opacity: 0.75, marginTop: 14, fontSize: 13, lineHeight: 1.5 }}>
+            You must subscribe before accessing the Builder. Public share links (/s/&lt;id&gt;) stay public.
+          </p>
         </div>
 
-        {/* Custom domain instructions (post-purchase) */}
+        {/* Domain instructions */}
         <div
           style={{
             marginTop: 18,
