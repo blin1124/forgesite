@@ -1,76 +1,125 @@
+// app/api/checkout/route.ts
 import { NextResponse } from "next/server";
+import Stripe from "stripe";
 import { stripe } from "@/lib/stripe";
+import { supabaseAdmin } from "@/lib/supabase";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { supabaseAdmin } from "@/lib/supabase/admin";
-
-function getAppUrl() {
-  return process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-}
-
-async function upsertCustomer(userId: string, email?: string | null) {
-  // Try profiles first (recommended), otherwise billing table
-  const { data: profile } = await supabaseAdmin
-    .from("profiles")
-    .select("stripe_customer_id")
-    .eq("id", userId)
-    .maybeSingle();
-
-  const existing = profile?.stripe_customer_id;
-  if (existing) return existing;
-
-  const customer = await stripe.customers.create({
-    email: email || undefined,
-    metadata: { supabase_user_id: userId },
-  });
-
-  // Write to profiles if it exists; ignore errors if table differs
-  await supabaseAdmin
-    .from("profiles")
-    .upsert({ id: userId, stripe_customer_id: customer.id, updated_at: new Date().toISOString() })
-    .throwOnError()
-    .catch(() => {});
-
-  // Also attempt billing table for people using option B
-  await supabaseAdmin
-    .from("billing")
-    .upsert({ user_id: userId, stripe_customer_id: customer.id, updated_at: new Date().toISOString() })
-    .catch(() => {});
-
-  return customer.id;
-}
 
 export async function POST(req: Request) {
   try {
-    const { next } = await req.json().catch(() => ({ next: "/builder" }));
+    const body = await req.json().catch(() => ({}));
 
-    const supabase = createSupabaseServerClient();
-    const { data } = await supabase.auth.getUser();
-    const user = data?.user;
+    const priceId: string =
+      body?.priceId || process.env.STRIPE_PRICE_ID || "";
 
-    if (!user) {
-      return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+    if (!priceId) {
+      return new NextResponse("Missing STRIPE_PRICE_ID", { status: 500 });
     }
 
-    const customerId = await upsertCustomer(user.id, user.email);
+    const appUrl =
+      process.env.NEXT_PUBLIC_APP_URL ||
+      process.env.NEXT_PUBLIC_SITE_URL ||
+      "http://localhost:3000";
+
+    // Get logged-in user from cookies (server client)
+    const supabase = createSupabaseServerClient();
+    const {
+      data: { user },
+      error: userErr,
+    } = await supabase.auth.getUser();
+
+    if (userErr || !user) {
+      return new NextResponse("Unauthorized", { status: 401 });
+    }
+
+    const userId = user.id;
+    const email = user.email || undefined;
+
+    // Try to find existing stripe_customer_id (profiles first, then billing)
+    let existingCustomerId: string | null = null;
+
+    const prof = await supabaseAdmin
+      .from("profiles")
+      .select("stripe_customer_id")
+      .eq("id", userId)
+      .maybeSingle();
+
+    existingCustomerId = prof.data?.stripe_customer_id ?? null;
+
+    if (!existingCustomerId) {
+      const bill = await supabaseAdmin
+        .from("billing")
+        .select("stripe_customer_id")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      existingCustomerId = bill.data?.stripe_customer_id ?? null;
+    }
+
+    // Create Stripe customer if missing
+    let customerId = existingCustomerId;
+
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        email,
+        metadata: { user_id: userId },
+      });
+      customerId = customer.id;
+
+      // Save to profiles (ignore errors if table/column differs)
+      try {
+        await supabaseAdmin
+          .from("profiles")
+          .upsert({
+            id: userId,
+            stripe_customer_id: customerId,
+            updated_at: new Date().toISOString(),
+          })
+          .throwOnError();
+      } catch {
+        // ignore
+      }
+
+      // Also attempt billing table (ignore errors if table/column differs)
+      try {
+        await supabaseAdmin
+          .from("billing")
+          .upsert({
+            user_id: userId,
+            stripe_customer_id: customerId,
+            updated_at: new Date().toISOString(),
+          })
+          .throwOnError();
+      } catch {
+        // ignore
+      }
+    }
+
+    // Create checkout session
+    const success_url =
+      body?.success_url || `${appUrl}/billing?success=1`;
+    const cancel_url =
+      body?.cancel_url || `${appUrl}/billing?canceled=1`;
 
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
-      customer: customerId,
-      line_items: [{ price: process.env.STRIPE_PRICE_ID!, quantity: 1 }],
+      customer: customerId!,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url,
+      cancel_url,
       allow_promotion_codes: true,
-      success_url: `${getAppUrl()}/billing/success?next=${encodeURIComponent(next || "/builder")}`,
-      cancel_url: `${getAppUrl()}/billing?next=${encodeURIComponent(next || "/builder")}`,
-      metadata: { supabase_user_id: user.id },
       subscription_data: {
-        metadata: { supabase_user_id: user.id },
+        metadata: { user_id: userId },
       },
-    });
+      metadata: { user_id: userId },
+    } satisfies Stripe.Checkout.SessionCreateParams);
 
     return NextResponse.json({ url: session.url });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Checkout error" }, { status: 500 });
+  } catch (err: any) {
+    return new NextResponse(err?.message || "Checkout error", { status: 500 });
   }
 }
+
 
 
 
