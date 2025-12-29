@@ -13,15 +13,7 @@ function supabaseBrowser() {
   });
 }
 
-async function getEntitlement() {
-  // This assumes you already have /api/entitlement working in your project.
-  // It should return JSON like: { active: true } or { active: false }
-  const res = await fetch("/api/entitlement", { method: "GET", cache: "no-store" });
-  if (!res.ok) return { active: false };
-  return (await res.json()) as { active?: boolean };
-}
-
-export default function LoginPage() {
+export default function SignupPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = useMemo(() => searchParams.get("next") || "/builder", [searchParams]);
@@ -37,29 +29,20 @@ export default function LoginPage() {
     setMounted(true);
   }, []);
 
-  async function finishRedirect() {
-    // If they are not subscribed, force billing.
-    const ent = await getEntitlement();
-    if (!ent?.active) {
-      router.replace("/billing");
-      return;
-    }
-    router.replace(next);
-  }
-
-  async function onLogin(e: React.FormEvent) {
+  async function onSignup(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
     setLoading(true);
 
     try {
       const supabase = supabaseBrowser();
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const { error } = await supabase.auth.signUp({ email, password });
       if (error) throw error;
 
-      await finishRedirect();
+      // ✅ New users must subscribe first
+      router.replace("/billing");
     } catch (err: any) {
-      setMsg(err?.message || "Login failed.");
+      setMsg(err?.message || "Signup failed.");
     } finally {
       setLoading(false);
     }
@@ -82,14 +65,13 @@ export default function LoginPage() {
       });
 
       if (error) throw error;
-      // Redirect happens via OAuth
     } catch (err: any) {
-      setMsg(err?.message || "Google sign-in failed.");
+      setMsg(err?.message || "Google sign-up failed.");
       setLoading(false);
     }
   }
 
-  // ✅ Hydration fix: don’t SSR-render the form at all
+  // ✅ Hydration fix
   if (!mounted) return null;
 
   return (
@@ -115,9 +97,9 @@ export default function LoginPage() {
           boxShadow: "0 18px 60px rgba(0,0,0,0.45)",
         }}
       >
-        <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 6 }}>Log in to ForgeSite</h1>
+        <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 6 }}>Create your account</h1>
         <div style={{ opacity: 0.8, fontSize: 14, marginBottom: 16 }}>
-          Continue to: <b>{next}</b>
+          Sign up to start building with ForgeSite.
         </div>
 
         <button
@@ -139,10 +121,10 @@ export default function LoginPage() {
         </button>
 
         <div style={{ opacity: 0.65, fontSize: 12, margin: "10px 0 14px" }}>
-          Or log in with email
+          Or sign up with email
         </div>
 
-        <form onSubmit={onLogin}>
+        <form onSubmit={onSignup}>
           <label style={{ display: "block", fontSize: 12, opacity: 0.9, marginBottom: 6 }}>
             Email
           </label>
@@ -170,7 +152,7 @@ export default function LoginPage() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             type="password"
-            autoComplete="current-password"
+            autoComplete="new-password"
             required
             style={{
               width: "100%",
@@ -197,7 +179,7 @@ export default function LoginPage() {
               cursor: loading ? "not-allowed" : "pointer",
             }}
           >
-            {loading ? "Working..." : "Log in"}
+            {loading ? "Working..." : "Create account"}
           </button>
         </form>
 
@@ -218,16 +200,15 @@ export default function LoginPage() {
         )}
 
         <div style={{ marginTop: 14, fontSize: 13, opacity: 0.85 }}>
-          Need an account?{" "}
-          <Link href="/signup" style={{ color: "white", fontWeight: 800, textDecoration: "underline" }}>
-            Create one
+          Already have an account?{" "}
+          <Link href="/login" style={{ color: "white", fontWeight: 800, textDecoration: "underline" }}>
+            Log in
           </Link>
         </div>
       </div>
     </main>
   );
 }
-
 
 
 
