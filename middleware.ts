@@ -1,89 +1,91 @@
-import { NextResponse, type NextRequest } from "next/server";
-import { createServerClient } from "@supabase/ssr";
+// middleware.ts
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+// Routes anyone can view without being logged in
+const PUBLIC_PATHS = new Set([
+  "/",
+  "/login",
+  "/signup",
+  "/terms",
+  "/privacy",
+  "/billing", // billing page can be shown, but it will require login inside page if you want
+]);
+
+// Files / assets / Next internals
+function isPublicFile(pathname: string) {
+  return (
+    pathname.startsWith("/_next") ||
+    pathname.startsWith("/favicon") ||
+    pathname.startsWith("/public") ||
+    pathname.endsWith(".png") ||
+    pathname.endsWith(".jpg") ||
+    pathname.endsWith(".jpeg") ||
+    pathname.endsWith(".svg") ||
+    pathname.endsWith(".ico") ||
+    pathname.endsWith(".css") ||
+    pathname.endsWith(".js")
+  );
+}
 
 export async function middleware(req: NextRequest) {
-  const res = NextResponse.next();
+  const { pathname, searchParams } = req.nextUrl;
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get(name: string) {
-          return req.cookies.get(name)?.value;
-        },
-        set(name: string, value: string, options: any) {
-          res.cookies.set({ name, value, ...options });
-        },
-        remove(name: string, options: any) {
-          res.cookies.set({ name, value: "", ...options, maxAge: 0 });
-        },
-      },
-    }
-  );
+  if (isPublicFile(pathname)) return NextResponse.next();
+  if (PUBLIC_PATHS.has(pathname)) return NextResponse.next();
 
-  const path = req.nextUrl.pathname;
+  // Require login for everything else
+  // We detect login by presence of Supabase auth cookies (standard names)
+  const hasAuthCookie =
+    req.cookies.get("sb-access-token") ||
+    req.cookies.get("sb-refresh-token") ||
+    // some supabase setups use "supabase-auth-token"
+    req.cookies.get("supabase-auth-token");
 
-  // ✅ Public routes (no login required)
-  const isPublic =
-    path === "/" ||
-    path.startsWith("/login") ||
-    path.startsWith("/signup") ||
-    path.startsWith("/terms") ||
-    path.startsWith("/privacy") ||
-    path.startsWith("/api/stripe/webhook") ||
-    path.startsWith("/api/health");
-
-  // Get user (auth)
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  // If not logged in and not public -> login
-  if (!user && !isPublic) {
+  if (!hasAuthCookie) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
-    url.searchParams.set("next", path);
+    url.searchParams.set("next", pathname);
     return NextResponse.redirect(url);
   }
 
-  // ✅ Routes that require payment/subscription
-  const requiresPaid =
-    path.startsWith("/builder") ||
-    path.startsWith("/sites") ||
-    path.startsWith("/site") ||
-    path.startsWith("/templates");
+  // Enforce "must pay before builder"
+  // Only gate these paths. Add more if needed.
+  const gated = pathname.startsWith("/builder");
 
-  // If logged in and trying to access paid areas, verify subscription
-  if (user && requiresPaid) {
-    // 🔧 CHANGE THIS if your schema uses a different table/column
-    // Table: profiles
-    // Column: subscription_status
-    const { data: profile, error } = await supabase
-      .from("profiles")
-      .select("subscription_status")
-      .eq("id", user.id)
-      .single();
+  if (!gated) return NextResponse.next();
 
-    const status = profile?.subscription_status;
+  // Call your entitlement endpoint (must exist and return { active: boolean })
+  // Uses same domain so it works on Vercel + preview.
+  const origin = req.nextUrl.origin;
+  const entitlementUrl = new URL("/api/entitlement", origin);
 
-    const hasAccess = status === "active" || status === "trialing";
+  // Forward cookies so API can see the user session
+  const res = await fetch(entitlementUrl, {
+    headers: { cookie: req.headers.get("cookie") || "" },
+  }).catch(() => null);
 
-    // If missing profile row or not active -> send to billing
-    if (error || !hasAccess) {
-      const url = req.nextUrl.clone();
-      url.pathname = "/billing";
-      url.searchParams.set("next", path); // optional: remember where they wanted to go
-      return NextResponse.redirect(url);
-    }
+  if (!res || !res.ok) {
+    // If entitlement check fails, safest behavior is to send to billing
+    const url = req.nextUrl.clone();
+    url.pathname = "/billing";
+    return NextResponse.redirect(url);
   }
 
-  return res;
+  const data = await res.json().catch(() => ({ active: false }));
+  if (!data?.active) {
+    const url = req.nextUrl.clone();
+    url.pathname = "/billing";
+    return NextResponse.redirect(url);
+  }
+
+  return NextResponse.next();
 }
 
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };
+
 
 
 
