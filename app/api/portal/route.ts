@@ -1,54 +1,56 @@
 // app/api/portal/route.ts
 import { NextResponse } from "next/server";
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 import { supabaseRoute } from "@/lib/supabase-server";
+import { supabaseAdmin } from "@/lib/supabase";
 
 export async function POST(req: Request) {
   try {
-    const stripeSecret = process.env.STRIPE_SECRET_KEY;
-    if (!stripeSecret) {
-      return new NextResponse("Missing STRIPE_SECRET_KEY", { status: 500 });
-    }
-
-    const stripe = new Stripe(stripeSecret, {
-      // IMPORTANT: prevents the exact Vercel type mismatch you saw earlier
-      apiVersion: "2023-10-16",
-    });
+    const body = await req.json().catch(() => ({}));
+    const returnUrl =
+      body?.returnUrl ||
+      process.env.NEXT_PUBLIC_APP_URL ||
+      process.env.NEXT_PUBLIC_SITE_URL ||
+      "http://localhost:3000/billing";
 
     const supabase = supabaseRoute();
-
-    // Must be logged in to open billing portal
     const {
       data: { user },
-      error: userErr,
+      error,
     } = await supabase.auth.getUser();
 
-    if (userErr || !user) {
+    if (error || !user) {
       return new NextResponse("Unauthorized", { status: 401 });
     }
 
-    // You may store this somewhere else in your DB.
-    // This version tries: user_metadata.stripe_customer_id first.
-    const customerId =
-      (user.user_metadata as any)?.stripe_customer_id ||
-      (user.app_metadata as any)?.stripe_customer_id;
+    // Find stripe_customer_id (profiles first, then billing)
+    let customerId: string | null = null;
+
+    const prof = await supabaseAdmin
+      .from("profiles")
+      .select("stripe_customer_id")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    customerId = prof.data?.stripe_customer_id ?? null;
 
     if (!customerId) {
-      return new NextResponse(
-        "Missing stripe_customer_id for this user (store it on signup/webhook).",
-        { status: 400 }
-      );
+      const bill = await supabaseAdmin
+        .from("billing")
+        .select("stripe_customer_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      customerId = bill.data?.stripe_customer_id ?? null;
     }
 
-    const body = await req.json().catch(() => ({}));
-    const return_url =
-      body?.return_url ||
-      process.env.NEXT_PUBLIC_APP_URL ||
-      "https://forgesite-seven.vercel.app";
+    if (!customerId) {
+      return new NextResponse("No Stripe customer found for user", { status: 400 });
+    }
 
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
-      return_url,
+      return_url: returnUrl,
     });
 
     return NextResponse.json({ url: session.url });
@@ -56,6 +58,7 @@ export async function POST(req: Request) {
     return new NextResponse(err?.message || "Portal error", { status: 500 });
   }
 }
+
 
 
 
