@@ -4,10 +4,12 @@ import React, { useEffect, useMemo, useState } from "react";
 
 type SiteRow = {
   id: string;
-  name: string | null;
-  prompt: string | null;
-  html: string | null;
+  template: string | null;
+  content: string | null;
   created_at: string | null;
+  html: string | null;
+  prompt: string | null;
+  name: string | null;
 };
 
 export default function SitesPage() {
@@ -45,16 +47,24 @@ export default function SitesPage() {
   }, [rows, q]);
 
   function shareUrl(id: string) {
-    // PUBLIC share route
     return `${window.location.origin}/s/${id}`;
   }
 
   return (
     <div style={pageStyle}>
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
           <div>
-            <h1 style={{ margin: 0, fontSize: 34, fontWeight: 900, letterSpacing: -0.5 }}>My Sites</h1>
+            <h1 style={{ margin: 0, fontSize: 34, fontWeight: 900, letterSpacing: -0.5 }}>
+              My Sites
+            </h1>
             <p style={{ marginTop: 6, opacity: 0.85 }}>
               These are the websites you saved from <b>/builder</b>.
             </p>
@@ -81,23 +91,40 @@ export default function SitesPage() {
           <div style={{ marginTop: 18, opacity: 0.85 }}>Loading…</div>
         ) : err ? (
           <div style={{ marginTop: 18, color: "rgba(255,255,255,0.95)" }}>
-            <div style={{ background: "rgba(0,0,0,0.22)", padding: 12, borderRadius: 12, border: border }}>
+            <div
+              style={{
+                background: "rgba(0,0,0,0.22)",
+                padding: 12,
+                borderRadius: 12,
+                border: border,
+              }}
+            >
               <b>Error:</b> {err}
               <div style={{ marginTop: 8, opacity: 0.85 }}>
-                Confirm <code>/api/sites/list</code> works by opening it in the browser.
+                Make sure <code>/api/sites/list</code> works (try opening it in the browser).
               </div>
             </div>
           </div>
         ) : filtered.length === 0 ? (
           <div style={{ marginTop: 18, opacity: 0.85 }}>
-            No saved sites yet. Go to <a href="/builder" style={{ color: "white" }}>/builder</a> and click{" "}
-            <b>Save Website</b>.
+            No saved sites yet. Go to{" "}
+            <a href="/builder" style={{ color: "white" }}>
+              /builder
+            </a>{" "}
+            and click <b>Save Website</b>.
           </div>
         ) : (
           <div style={{ marginTop: 16, display: "grid", gap: 12 }}>
             {filtered.map((r) => (
               <div key={r.id} style={cardStyle}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    alignItems: "flex-start",
+                  }}
+                >
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 900, fontSize: 16 }}>
                       {r.name?.trim() ? r.name : "Untitled Site"}
@@ -111,11 +138,12 @@ export default function SitesPage() {
                   </div>
 
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                    {/* IMPORTANT: Use /s/<id> because you confirmed that route renders correctly */}
-                    <a href={`/s/${r.id}`} style={btnSmallStyle}>
+                    {/* OPEN = private viewer (your app) */}
+                    <a href={`/site/${r.id}`} style={btnSmallStyle}>
                       Open
                     </a>
 
+                    {/* COPY HTML */}
                     <button
                       onClick={() => {
                         if (!r.html) return alert("This row has no html saved.");
@@ -127,11 +155,12 @@ export default function SitesPage() {
                       Copy HTML
                     </button>
 
+                    {/* COPY SHARE LINK */}
                     <button
                       onClick={() => {
                         const url = shareUrl(r.id);
                         navigator.clipboard.writeText(url);
-                        alert("Share link copied!");
+                        alert(`Share link copied!\n\n${url}`);
                       }}
                       style={btnSmallStyle}
                     >
