@@ -65,4 +65,3 @@ const btnStyle: React.CSSProperties = {
   cursor: "pointer",
   fontWeight: 600,
 };
-
