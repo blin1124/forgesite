@@ -13,7 +13,15 @@ function supabaseBrowser() {
   });
 }
 
-export default function SignupPage() {
+async function getEntitlement() {
+  // This assumes you already have /api/entitlement working in your project.
+  // It should return JSON like: { active: true } or { active: false }
+  const res = await fetch("/api/entitlement", { method: "GET", cache: "no-store" });
+  if (!res.ok) return { active: false };
+  return (await res.json()) as { active?: boolean };
+}
+
+export default function LoginPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = useMemo(() => searchParams.get("next") || "/builder", [searchParams]);
@@ -29,20 +37,29 @@ export default function SignupPage() {
     setMounted(true);
   }, []);
 
-  async function onSignup(e: React.FormEvent) {
+  async function finishRedirect() {
+    // If they are not subscribed, force billing.
+    const ent = await getEntitlement();
+    if (!ent?.active) {
+      router.replace("/billing");
+      return;
+    }
+    router.replace(next);
+  }
+
+  async function onLogin(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
     setLoading(true);
 
     try {
       const supabase = supabaseBrowser();
-      const { error } = await supabase.auth.signUp({ email, password });
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
 
-      // ✅ New users must subscribe first
-      router.replace("/billing");
+      await finishRedirect();
     } catch (err: any) {
-      setMsg(err?.message || "Signup failed.");
+      setMsg(err?.message || "Login failed.");
     } finally {
       setLoading(false);
     }
@@ -65,13 +82,14 @@ export default function SignupPage() {
       });
 
       if (error) throw error;
+      // Redirect happens via OAuth
     } catch (err: any) {
-      setMsg(err?.message || "Google sign-up failed.");
+      setMsg(err?.message || "Google sign-in failed.");
       setLoading(false);
     }
   }
 
-  // ✅ Hydration fix
+  // ✅ Hydration fix: don’t SSR-render the form at all
   if (!mounted) return null;
 
   return (
@@ -97,9 +115,9 @@ export default function SignupPage() {
           boxShadow: "0 18px 60px rgba(0,0,0,0.45)",
         }}
       >
-        <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 6 }}>Create your account</h1>
+        <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 6 }}>Log in to ForgeSite</h1>
         <div style={{ opacity: 0.8, fontSize: 14, marginBottom: 16 }}>
-          Sign up to start building with ForgeSite.
+          Continue to: <b>{next}</b>
         </div>
 
         <button
@@ -121,10 +139,10 @@ export default function SignupPage() {
         </button>
 
         <div style={{ opacity: 0.65, fontSize: 12, margin: "10px 0 14px" }}>
-          Or sign up with email
+          Or log in with email
         </div>
 
-        <form onSubmit={onSignup}>
+        <form onSubmit={onLogin}>
           <label style={{ display: "block", fontSize: 12, opacity: 0.9, marginBottom: 6 }}>
             Email
           </label>
@@ -152,7 +170,7 @@ export default function SignupPage() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             type="password"
-            autoComplete="new-password"
+            autoComplete="current-password"
             required
             style={{
               width: "100%",
@@ -179,7 +197,7 @@ export default function SignupPage() {
               cursor: loading ? "not-allowed" : "pointer",
             }}
           >
-            {loading ? "Working..." : "Create account"}
+            {loading ? "Working..." : "Log in"}
           </button>
         </form>
 
@@ -200,15 +218,16 @@ export default function SignupPage() {
         )}
 
         <div style={{ marginTop: 14, fontSize: 13, opacity: 0.85 }}>
-          Already have an account?{" "}
-          <Link href="/login" style={{ color: "white", fontWeight: 800, textDecoration: "underline" }}>
-            Log in
+          Need an account?{" "}
+          <Link href="/signup" style={{ color: "white", fontWeight: 800, textDecoration: "underline" }}>
+            Create one
           </Link>
         </div>
       </div>
     </main>
   );
 }
+
 
 
 
