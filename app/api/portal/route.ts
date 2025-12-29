@@ -1,36 +1,53 @@
 import { NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabase/server";
-import { stripe } from "@/lib/stripe";
-import { supabaseAdmin } from "@/lib/supabase/admin";
+import Stripe from "stripe";
+import { cookies } from "next/headers";
+import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: "2025-02-24.acacia",
+});
 
 export async function POST(req: Request) {
   try {
-    const { returnTo } = await req.json().catch(() => ({ returnTo: "/billing" }));
-    const supabase = supabaseServer();
-    const { data: auth } = await supabase.auth.getUser();
-    const user = auth?.user;
-    if (!user) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
+    const supabase = createRouteHandlerClient({ cookies });
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-    const { data: profile } = await supabaseAdmin
-      .from("profiles")
-      .select("stripe_customer_id")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    if (!profile?.stripe_customer_id) {
-      return NextResponse.json({ error: "No Stripe customer found yet. Click Subscribe first." }, { status: 400 });
+    if (!user) {
+      return NextResponse.json({ error: "Not logged in" }, { status: 401 });
     }
 
-    const origin = new URL(req.url).origin;
+    const body = await req.json().catch(() => ({}));
+    const returnTo =
+      typeof body?.returnTo === "string" ? body.returnTo : "http://localhost:3000/billing";
+
+    const { data: row } = await supabase
+      .from("stripe_customers")
+      .select("stripe_customer_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    const customerId = row?.stripe_customer_id;
+    if (!customerId) {
+      return NextResponse.json(
+        { error: "No Stripe customer found. Subscribe first." },
+        { status: 400 }
+      );
+    }
 
     const portal = await stripe.billingPortal.sessions.create({
-      customer: profile.stripe_customer_id,
-      return_url: `${origin}${returnTo || "/billing"}`,
+      customer: customerId,
+      return_url: returnTo,
     });
 
     return NextResponse.json({ url: portal.url });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Portal error" }, { status: 500 });
+    return NextResponse.json(
+      { error: e?.message || "Portal error" },
+      { status: 500 }
+    );
   }
 }
+
 
