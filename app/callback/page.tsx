@@ -1,80 +1,49 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabaseBrowser } from "@/lib/supabase-browser";
+import { createClient } from "@supabase/supabase-js";
+
+export const dynamic = "force-dynamic";
+
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+  return createClient(url, anon);
+}
 
 export default function CallbackPage() {
   const router = useRouter();
   const sp = useSearchParams();
-  const next = sp.get("next") || "/billing";
-  const [msg, setMsg] = useState("Signing you in…");
+
+  const next = useMemo(() => sp.get("next") || "/billing", [sp]);
+  const [msg, setMsg] = useState("Finishing sign-in…");
 
   useEffect(() => {
-    let mounted = true;
-
     const run = async () => {
       try {
-        // ✅ IMPORTANT: supabaseBrowser is a FUNCTION — call it
-        const sb = supabaseBrowser();
-
-        // ✅ then use sb.auth...
-        const { data, error } = await sb.auth.getSession();
-
-        if (error) {
-          console.error("Callback getSession error:", error.message);
-          if (mounted) setMsg("Sign-in failed. Redirecting to login…");
-          setTimeout(() => router.replace(`/login?next=${encodeURIComponent(next)}`), 700);
+        const supabase = getSupabase();
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        if (!data?.session) {
+          setMsg("No session found. Redirecting to login…");
+          router.replace(`/login?next=${encodeURIComponent(next)}`);
           return;
         }
-
-        if (data?.session) {
-          if (mounted) setMsg("Signed in — redirecting…");
-          router.replace(next);
-          return;
-        }
-
-        if (mounted) setMsg("No session found. Redirecting to login…");
-        setTimeout(() => router.replace(`/login?next=${encodeURIComponent(next)}`), 700);
+        router.replace(next);
       } catch (e: any) {
-        console.error("Callback error:", e?.message || e);
-        if (mounted) setMsg("Sign-in failed. Redirecting to login…");
-        setTimeout(() => router.replace(`/login?next=${encodeURIComponent(next)}`), 700);
+        setMsg(e?.message || "Callback failed. Redirecting…");
+        router.replace(`/login?next=${encodeURIComponent(next)}`);
       }
     };
-
     run();
-    return () => {
-      mounted = false;
-    };
   }, [router, next]);
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "grid",
-        placeItems: "center",
-        padding: 24,
-        background: "radial-gradient(circle at top, #111827 0%, #000 70%)",
-        color: "white",
-        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
-      }}
-    >
-      <div
-        style={{
-          width: "min(720px, 95vw)",
-          borderRadius: 16,
-          border: "1px solid rgba(255,255,255,.12)",
-          background: "rgba(17, 24, 39, .65)",
-          backdropFilter: "blur(10px)",
-          padding: 22,
-        }}
-      >
-        <h2 style={{ margin: 0, fontSize: 22 }}>ForgeSite</h2>
-        <p style={{ opacity: 0.85, marginTop: 8 }}>{msg}</p>
-      </div>
-    </div>
+    <main style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
+      <div style={{ fontFamily: "system-ui", opacity: 0.85 }}>{msg}</div>
+    </main>
   );
 }
+
 
