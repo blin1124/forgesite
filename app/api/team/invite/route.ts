@@ -1,79 +1,38 @@
-export const runtime = "nodejs"
+// app/api/team/invite/route.ts
+import { NextResponse } from "next/server";
+import { supabaseAdmin } from "@/lib/supabase";
 
-import { NextResponse } from "next/server"
-import { Resend } from "resend"
-import { supabaseAdmin } from "@/lib/supabase"
-
-type InviteBody = {
-  email?: string
-  teamId?: string
-  inviterName?: string
-}
+export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as InviteBody
+    const body = await req.json();
+    const teamId = String(body.teamId || "").trim();
+    const email = String(body.email || "").trim().toLowerCase();
+    const role = String(body.role || "member").trim();
 
-    const email = body.email?.trim()
-    const teamId = body.teamId?.trim()
-    const inviterName = body.inviterName?.trim() || "Forgesite"
+    if (!teamId) return new NextResponse("Missing teamId", { status: 400 });
+    if (!email) return new NextResponse("Missing email", { status: 400 });
 
-    if (!email) return new NextResponse("Missing email", { status: 400 })
-    if (!teamId) return new NextResponse("Missing teamId", { status: 400 })
-
-    const resendKey = process.env.RESEND_API_KEY
-    if (!resendKey) {
-      return new NextResponse("Missing RESEND_API_KEY", { status: 500 })
-    }
-
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"
-    const token = crypto.randomUUID()
-
-    // ✅ IMPORTANT: your supabaseAdmin is a FUNCTION — call it to get the client
-    const admin = supabaseAdmin()
+    // ✅ supabaseAdmin is a CLIENT object (not a function)
+    const admin = supabaseAdmin;
 
     const { error: inviteErr } = await admin.from("team_invites").insert({
       team_id: teamId,
       email,
-      token,
-      inviter_name: inviterName,
-    })
+      role,
+      status: "pending",
+      created_at: new Date().toISOString(),
+    });
 
     if (inviteErr) {
-      console.error("Supabase invite insert error:", inviteErr)
-      return new NextResponse("Failed to create invite", { status: 500 })
+      return new NextResponse(inviteErr.message, { status: 500 });
     }
 
-    const acceptUrl = `${appUrl}/team/accept?token=${encodeURIComponent(token)}`
-
-    const resend = new Resend(resendKey)
-    const { error: emailErr } = await resend.emails.send({
-      from: "Forgesite <no-reply@forgesite.ai>",
-      to: [email],
-      subject: `${inviterName} invited you to join a Forgesite team`,
-      html: `
-        <div style="font-family:Arial,sans-serif;line-height:1.5">
-          <h2>You&apos;re invited</h2>
-          <p><b>${inviterName}</b> invited you to join their team in Forgesite.</p>
-          <p>
-            <a href="${acceptUrl}" style="display:inline-block;padding:10px 14px;background:#111;color:#fff;text-decoration:none;border-radius:6px">
-              Accept invite
-            </a>
-          </p>
-          <p style="font-size:12px;color:#666">Or paste this link in your browser:<br/>${acceptUrl}</p>
-        </div>
-      `,
-    })
-
-    if (emailErr) {
-      console.error("Resend error:", emailErr)
-      return new NextResponse("Failed to send invite email", { status: 500 })
-    }
-
-    return NextResponse.json({ ok: true })
-  } catch (err) {
-    console.error("team/invite error:", err)
-    return new NextResponse("Internal server error", { status: 500 })
+    return NextResponse.json({ ok: true });
+  } catch (err: any) {
+    return new NextResponse(err?.message || "Invite failed", { status: 500 });
   }
 }
+
 
