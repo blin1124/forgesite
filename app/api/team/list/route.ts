@@ -1,18 +1,27 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/supabase'
-export const runtime = 'nodejs'
+// app/api/team/list/route.ts
+import { NextResponse } from "next/server";
+import { supabaseAdmin } from "@/lib/supabase";
 
-export async function POST(req: NextRequest) {
+export const runtime = "nodejs";
+
+export async function GET(req: Request) {
   try {
-    const { owner_email } = await req.json()
-    if (!owner_email) return new NextResponse('Missing owner_email', { status: 400 })
-    const supa = supabaseAdmin()
-    const { data: owner, error: e1 } = await supa.from('entitlements').select('team_id, role').eq('email', owner_email).maybeSingle()
-    if (e1 || !owner || owner.role !== 'owner') return new NextResponse('Not owner or no team', { status: 403 })
-    const { data: members } = await supa.from('entitlements').select('email, role').eq('team_id', owner.team_id)
-    const { data: invites } = await supa.from('team_invites').select('id, invitee_email, status, created_at').eq('team_id', owner.team_id).neq('status','revoked')
-    return NextResponse.json({ members: members || [], invites: invites || [] })
-  } catch (e:any) {
-    return new NextResponse(e.message || 'Server error', { status: 500 })
+    const url = new URL(req.url);
+    const teamId = (url.searchParams.get("teamId") || "").trim();
+
+    if (!teamId) return new NextResponse("Missing teamId", { status: 400 });
+
+    const { data, error } = await supabaseAdmin
+      .from("team_invites")
+      .select("*")
+      .eq("team_id", teamId)
+      .order("created_at", { ascending: false });
+
+    if (error) return new NextResponse(error.message, { status: 500 });
+
+    return NextResponse.json({ ok: true, invites: data || [] });
+  } catch (err: any) {
+    return new NextResponse(err?.message || "List failed", { status: 500 });
   }
 }
+
