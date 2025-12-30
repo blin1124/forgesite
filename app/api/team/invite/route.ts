@@ -14,10 +14,7 @@ export async function POST(req: Request) {
     if (!teamId) return new NextResponse("Missing teamId", { status: 400 });
     if (!email) return new NextResponse("Missing email", { status: 400 });
 
-    // ✅ supabaseAdmin is a CLIENT object (not a function)
-    const admin = supabaseAdmin;
-
-    const { error: inviteErr } = await admin.from("team_invites").insert({
+    const { error } = await supabaseAdmin.from("team_invites").insert({
       team_id: teamId,
       email,
       role,
@@ -25,14 +22,13 @@ export async function POST(req: Request) {
       created_at: new Date().toISOString(),
     });
 
-    if (inviteErr) {
-      return new NextResponse(inviteErr.message, { status: 500 });
-    }
+    if (error) return new NextResponse(error.message, { status: 500 });
 
     return NextResponse.json({ ok: true });
   } catch (err: any) {
     return new NextResponse(err?.message || "Invite failed", { status: 500 });
   }
 }
+
 
 
