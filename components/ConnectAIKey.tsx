@@ -1,96 +1,126 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import { supabaseBrowser } from "@/lib/supabase-browser"
+import { useEffect, useState } from "react";
+import { supabaseBrowser } from "@/lib/supabase-browser";
+
+type Status = string | null;
 
 export default function ConnectAIKey() {
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [value, setValue] = useState("")
-  const [status, setStatus] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState<Status>(null);
+  const [apiKey, setApiKey] = useState("");
 
   useEffect(() => {
-    const load = async () => {
-      setLoading(true)
-      setStatus(null)
+    let mounted = true;
 
-      const { data, error } = await supabaseBrowser.auth.getSession()
-      if (error || !data?.session?.user?.id) {
-        setStatus("You must be logged in.")
-        setLoading(false)
-        return
+    const run = async () => {
+      try {
+        setLoading(true);
+        setStatus(null);
+
+        // ✅ IMPORTANT: supabaseBrowser is a FUNCTION — call it
+        const sb = supabaseBrowser();
+
+        // ✅ then use sb.auth
+        const { data, error } = await sb.auth.getSession();
+
+        if (error || !data?.session?.user?.id) {
+          if (mounted) setStatus("You must be logged in.");
+          return;
+        }
+
+        // Load any previously saved key (client-side only)
+        const saved = localStorage.getItem("forge_apiKey") || "";
+        if (mounted) setApiKey(saved);
+        if (mounted) setStatus(saved ? "API key loaded." : "No API key saved yet.");
+      } catch (e: any) {
+        console.error("ConnectAIKey error:", e?.message || e);
+        if (mounted) setStatus("Error loading session.");
+      } finally {
+        if (mounted) setLoading(false);
       }
+    };
 
-      // Optional: If you store keys in a table, you can load it here.
-      // This component will still work without loading anything.
-      setLoading(false)
-    }
+    run();
 
-    load()
-  }, [])
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
-  const save = async () => {
-    setSaving(true)
-    setStatus(null)
-
-    try {
-      const { data, error } = await supabaseBrowser.auth.getSession()
-      if (error || !data?.session?.user?.id) {
-        setStatus("You must be logged in.")
-        return
-      }
-
-      const apiKey = value.trim()
-      if (!apiKey) {
-        setStatus("Please paste an OpenAI API key.")
-        return
-      }
-
-      // Call your API route that encrypts + stores the key.
-      const res = await fetch("/api/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey }),
-      })
-
-      if (!res.ok) {
-        const txt = await res.text()
-        setStatus(txt || "Failed to save key.")
-        return
-      }
-
-      setStatus("Saved.")
-      setValue("")
-    } catch (e: any) {
-      setStatus(e?.message || "Failed to save key.")
-    } finally {
-      setSaving(false)
-    }
+  function save() {
+    localStorage.setItem("forge_apiKey", apiKey);
+    setStatus(apiKey ? "Saved." : "Cleared.");
   }
 
   if (loading) {
-    return <p className="text-sm text-gray-600">Loading…</p>
+    return (
+      <div style={{ fontSize: 14, opacity: 0.9 }}>
+        Loading…
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-3">
-      <label className="block text-sm font-medium">OpenAI API Key</label>
+    <div
+      style={{
+        borderRadius: 14,
+        border: "1px solid rgba(255,255,255,.14)",
+        padding: 14,
+        background: "rgba(0,0,0,.15)",
+      }}
+    >
+      <div style={{ fontWeight: 800, marginBottom: 6 }}>OpenAI API Key (BYOK)</div>
+      <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
+        This is stored in your browser only (localStorage). Not saved to the server.
+      </div>
+
+      {status ? (
+        <div
+          style={{
+            marginBottom: 10,
+            fontSize: 13,
+            opacity: 0.95,
+          }}
+        >
+          {status}
+        </div>
+      ) : null}
+
       <input
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
+        value={apiKey}
+        onChange={(e) => setApiKey(e.target.value)}
         placeholder="sk-..."
-        className="w-full rounded border px-3 py-2 text-sm"
+        type="password"
+        style={{
+          width: "100%",
+          padding: "10px 12px",
+          borderRadius: 12,
+          border: "1px solid rgba(255,255,255,.18)",
+          background: "rgba(0,0,0,.18)",
+          color: "white",
+          outline: "none",
+        }}
       />
+
       <button
         onClick={save}
-        disabled={saving}
-        className="rounded bg-black px-4 py-2 text-sm text-white disabled:opacity-60"
+        style={{
+          marginTop: 10,
+          width: "100%",
+          padding: "10px 12px",
+          borderRadius: 12,
+          border: "1px solid rgba(255,255,255,.18)",
+          background: "rgba(255,255,255,.14)",
+          color: "white",
+          fontWeight: 800,
+          cursor: "pointer",
+        }}
       >
-        {saving ? "Saving…" : "Save key"}
+        Save Key
       </button>
-      {status ? <p className="text-sm text-gray-700">{status}</p> : null}
     </div>
-  )
+  );
 }
 
 
