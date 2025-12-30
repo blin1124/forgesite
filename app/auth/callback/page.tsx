@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase-browser";
 
-export default function AuthCallbackPage() {
+export default function CallbackPage() {
   const router = useRouter();
   const sp = useSearchParams();
   const next = sp.get("next") || "/billing";
@@ -15,7 +15,7 @@ export default function AuthCallbackPage() {
 
     const run = async () => {
       try {
-        // ✅ supabaseBrowser is a function that returns the client
+        // ✅ supabaseBrowser is a function — call it to get the client
         const client = supabaseBrowser();
 
         const { data, error } = await client.auth.getSession();
@@ -27,14 +27,12 @@ export default function AuthCallbackPage() {
           return;
         }
 
-        // If there is a session, you’re authenticated
         if (data?.session) {
           if (mounted) setMsg("Signed in — redirecting…");
           router.replace(next);
           return;
         }
 
-        // No session yet — send to login
         if (mounted) setMsg("No session found. Redirecting to login…");
         setTimeout(() => router.replace(`/login?next=${encodeURIComponent(next)}`), 700);
       } catch (e: any) {
@@ -78,7 +76,6 @@ export default function AuthCallbackPage() {
     </div>
   );
 }
-
 
 
 
