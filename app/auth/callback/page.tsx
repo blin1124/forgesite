@@ -15,8 +15,10 @@ export default function CallbackPage() {
 
     const run = async () => {
       try {
-        const sb = supabaseBrowser(); // ✅ CALL IT
+        // ✅ IMPORTANT: supabaseBrowser is a FUNCTION — call it
+        const sb = supabaseBrowser();
 
+        // ✅ then use sb.auth...
         const { data, error } = await sb.auth.getSession();
 
         if (error) {
@@ -75,6 +77,5 @@ export default function CallbackPage() {
     </div>
   );
 }
-
 
 
