@@ -1,27 +1,18 @@
-// app/api/team/list/route.ts
-import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase";
-
-export const runtime = "nodejs";
-
-export async function GET(req: Request) {
-  try {
-    const url = new URL(req.url);
-    const teamId = (url.searchParams.get("teamId") || "").trim();
-
-    if (!teamId) return new NextResponse("Missing teamId", { status: 400 });
-
-    const { data, error } = await supabaseAdmin
-      .from("team_invites")
-      .select("*")
-      .eq("team_id", teamId)
-      .order("created_at", { ascending: false });
-
-    if (error) return new NextResponse(error.message, { status: 500 });
-
-    return NextResponse.json({ ok: true, invites: data || [] });
-  } catch (err: any) {
-    return new NextResponse(err?.message || "List failed", { status: 500 });
-  }
-}
-
+https://nextjs.org/telemetry
+  ▲ Next.js 14.2.35
+   Creating an optimized production build ...
+ ✓ Compiled successfully
+   Linting and checking validity of types ...
+Failed to compile.
+./app/api/team/list/route.ts:9:18
+Type error: This expression is not callable.
+  Type 'SupabaseClient<any, "public", "public", any, any>' has no call signatures.
+   7 |     const { owner_email } = await req.json()
+   8 |     if (!owner_email) return new NextResponse('Missing owner_email', { status: 400 })
+>  9 |     const supa = supabaseAdmin()
+     |                  ^
+  10 |     const { data: owner, error: e1 } = await supa.from('entitlements').select('team_id, role').eq('email', owner_email).maybeSingle()
+  11 |     if (e1 || !owner || owner.role !== 'owner') return new NextResponse('Not owner or no team', { status: 403 })
+  12 |     const { data: members } = await supa.from('entitlements').select('email, role').eq('team_id', owner.team_id)
+Next.js build worker exited with code: 1 and signal: null
+Error: Command "npm run build" exited with 1
