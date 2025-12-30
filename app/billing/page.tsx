@@ -1,12 +1,14 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useState } from "react";
-import Link from "next/link";
+import { useMemo, useState } from "react";
+
+export const dynamic = "force-dynamic";
 
 export default function BillingPage() {
   const sp = useSearchParams();
-  const next = sp.get("next") || "/builder";
+  const next = useMemo(() => sp.get("next") || "/builder", [sp]);
+
   const [loading, setLoading] = useState<"checkout" | "portal" | "none">("none");
   const [error, setError] = useState<string>("");
 
@@ -68,12 +70,11 @@ export default function BillingPage() {
         }}
       >
         <h2 style={{ margin: 0, fontSize: 22 }}>ForgeSite Billing</h2>
-
         <p style={{ opacity: 0.85, marginTop: 8 }}>
-          Subscribe to access the Builder. Public share links stay public.
+          Subscribe to access the Builder. Public share links (<code>/s/&lt;id&gt;</code>) stay public.
         </p>
 
-        {error && (
+        {error ? (
           <div
             style={{
               marginTop: 12,
@@ -85,7 +86,7 @@ export default function BillingPage() {
           >
             {error}
           </div>
-        )}
+        ) : null}
 
         <div style={{ display: "flex", gap: 12, marginTop: 16, flexWrap: "wrap" }}>
           <button
@@ -117,35 +118,51 @@ export default function BillingPage() {
               cursor: "pointer",
             }}
           >
-            {loading === "portal" ? "Opening..." : "Manage subscription"}
+            {loading === "portal" ? "Opening..." : "Manage subscription / cancel"}
           </button>
-        </div>
 
-        {/* Legal links */}
-        <div
-          style={{
-            marginTop: 20,
-            display: "flex",
-            gap: 14,
-            flexWrap: "wrap",
-            fontSize: 13,
-            opacity: 0.85,
-          }}
-        >
-          <Link href="/terms" className="underline">
-            Terms of Service
-          </Link>
-          <Link href="/privacy" className="underline">
+          <a
+            href="/terms"
+            style={{
+              padding: "12px 16px",
+              borderRadius: 12,
+              border: "1px solid rgba(255,255,255,.18)",
+              background: "rgba(255,255,255,.06)",
+              color: "white",
+              fontWeight: 600,
+              textDecoration: "none",
+              display: "inline-flex",
+              alignItems: "center",
+            }}
+          >
+            Terms & Conditions
+          </a>
+
+          <a
+            href="/privacy"
+            style={{
+              padding: "12px 16px",
+              borderRadius: 12,
+              border: "1px solid rgba(255,255,255,.18)",
+              background: "rgba(255,255,255,.06)",
+              color: "white",
+              fontWeight: 600,
+              textDecoration: "none",
+              display: "inline-flex",
+              alignItems: "center",
+            }}
+          >
             Privacy Policy
-          </Link>
+          </a>
         </div>
 
-        <p style={{ opacity: 0.6, marginTop: 12, fontSize: 12 }}>
-          By subscribing, you agree to the Terms of Service and Privacy Policy.
+        <p style={{ opacity: 0.65, marginTop: 14, fontSize: 13 }}>
+          After paying, you’ll be sent back and unlocked automatically.
         </p>
       </div>
     </div>
   );
 }
+
 
 
