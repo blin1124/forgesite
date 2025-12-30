@@ -1,232 +1,161 @@
 "use client";
 
-import Link from "next/link";
+import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-function supabaseBrowser() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-  return createClient(url, anon, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
-  });
-}
+export const dynamic = "force-dynamic";
 
-async function getEntitlement() {
-  // This assumes you already have /api/entitlement working in your project.
-  // It should return JSON like: { active: true } or { active: false }
-  const res = await fetch("/api/entitlement", { method: "GET", cache: "no-store" });
-  if (!res.ok) return { active: false };
-  return (await res.json()) as { active?: boolean };
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+  return createClient(url, anon);
 }
 
 export default function LoginPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const next = useMemo(() => searchParams.get("next") || "/builder", [searchParams]);
+  const sp = useSearchParams();
 
-  const [mounted, setMounted] = useState(false);
+  // IMPORTANT: default next is /billing (your "must pay before builder" rule)
+  const next = useMemo(() => sp.get("next") || "/billing", [sp]);
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  async function finishRedirect() {
-    // If they are not subscribed, force billing.
-    const ent = await getEntitlement();
-    if (!ent?.active) {
-      router.replace("/billing");
-      return;
-    }
-    router.replace(next);
-  }
-
-  async function onLogin(e: React.FormEvent) {
-    e.preventDefault();
-    setMsg(null);
-    setLoading(true);
-
+  async function onLogin() {
+    setError("");
+    setBusy(true);
     try {
-      const supabase = supabaseBrowser();
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw error;
+      const supabase = getSupabase();
 
-      await finishRedirect();
-    } catch (err: any) {
-      setMsg(err?.message || "Login failed.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function onGoogle() {
-    setMsg(null);
-    setLoading(true);
-
-    try {
-      const supabase = supabaseBrowser();
-      const origin =
-        typeof window !== "undefined" ? window.location.origin : process.env.NEXT_PUBLIC_APP_URL;
-
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next)}`,
-        },
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
       });
 
-      if (error) throw error;
-      // Redirect happens via OAuth
-    } catch (err: any) {
-      setMsg(err?.message || "Google sign-in failed.");
-      setLoading(false);
+      if (error) throw new Error(error.message);
+
+      // Go to billing first (middleware should also enforce)
+      router.push(next);
+    } catch (e: any) {
+      setError(e?.message || "Login failed");
+    } finally {
+      setBusy(false);
     }
   }
-
-  // ✅ Hydration fix: don’t SSR-render the form at all
-  if (!mounted) return null;
 
   return (
     <main
       style={{
         minHeight: "100vh",
-        background: "radial-gradient(circle at top, #101827 0%, #05070d 60%)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "40px 16px",
+        display: "grid",
+        placeItems: "center",
+        padding: 24,
         color: "white",
+        background:
+          "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(124,58,237) 0%, rgb(109,40,217) 35%, rgb(91,33,182) 100%)",
+        fontFamily:
+          'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
       }}
     >
       <div
         style={{
-          width: "100%",
-          maxWidth: 520,
-          background: "rgba(255,255,255,0.06)",
-          border: "1px solid rgba(255,255,255,0.10)",
-          borderRadius: 18,
-          padding: 24,
-          boxShadow: "0 18px 60px rgba(0,0,0,0.45)",
+          width: "min(520px, 92vw)",
+          background: "rgba(255,255,255,0.12)",
+          border: "1px solid rgba(255,255,255,0.18)",
+          borderRadius: 16,
+          padding: 18,
+          boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
         }}
       >
-        <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 6 }}>Log in to ForgeSite</h1>
-        <div style={{ opacity: 0.8, fontSize: 14, marginBottom: 16 }}>
-          Continue to: <b>{next}</b>
-        </div>
+        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 900 }}>Log in</h1>
+        <p style={{ marginTop: 8, opacity: 0.85 }}>
+          Log in, then you’ll be sent to billing if you’re not subscribed.
+        </p>
 
-        <button
-          onClick={onGoogle}
-          disabled={loading}
-          style={{
-            width: "100%",
-            padding: "12px 14px",
-            borderRadius: 12,
-            border: "1px solid rgba(255,255,255,0.14)",
-            background: "rgba(255,255,255,0.10)",
-            color: "white",
-            fontWeight: 800,
-            cursor: loading ? "not-allowed" : "pointer",
-            marginBottom: 14,
-          }}
-        >
-          Continue with Google
-        </button>
-
-        <div style={{ opacity: 0.65, fontSize: 12, margin: "10px 0 14px" }}>
-          Or log in with email
-        </div>
-
-        <form onSubmit={onLogin}>
-          <label style={{ display: "block", fontSize: 12, opacity: 0.9, marginBottom: 6 }}>
-            Email
-          </label>
-          <input
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            type="email"
-            autoComplete="email"
-            required
-            style={{
-              width: "100%",
-              padding: "12px 12px",
-              borderRadius: 12,
-              border: "1px solid rgba(255,255,255,0.14)",
-              background: "rgba(0,0,0,0.35)",
-              color: "white",
-              marginBottom: 12,
-            }}
-          />
-
-          <label style={{ display: "block", fontSize: 12, opacity: 0.9, marginBottom: 6 }}>
-            Password
-          </label>
-          <input
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            type="password"
-            autoComplete="current-password"
-            required
-            style={{
-              width: "100%",
-              padding: "12px 12px",
-              borderRadius: 12,
-              border: "1px solid rgba(255,255,255,0.14)",
-              background: "rgba(0,0,0,0.35)",
-              color: "white",
-              marginBottom: 14,
-            }}
-          />
-
-          <button
-            type="submit"
-            disabled={loading}
-            style={{
-              width: "100%",
-              padding: "12px 14px",
-              borderRadius: 12,
-              border: "none",
-              background: loading ? "#2e2e2e" : "#0ea371",
-              color: "black",
-              fontWeight: 900,
-              cursor: loading ? "not-allowed" : "pointer",
-            }}
-          >
-            {loading ? "Working..." : "Log in"}
-          </button>
-        </form>
-
-        {msg && (
+        {error ? (
           <div
             style={{
               marginTop: 12,
-              padding: 10,
+              padding: 12,
               borderRadius: 12,
-              background: "rgba(255,0,0,0.12)",
-              border: "1px solid rgba(255,0,0,0.25)",
+              background: "rgba(185, 28, 28, .25)",
+              border: "1px solid rgba(185, 28, 28, .5)",
+            }}
+          >
+            {error}
+          </div>
+        ) : null}
+
+        <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+          <input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Email"
+            style={inputStyle}
+            autoComplete="email"
+          />
+          <input
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            type="password"
+            style={inputStyle}
+            autoComplete="current-password"
+          />
+
+          <button
+            onClick={onLogin}
+            disabled={busy || !email.trim() || password.length < 1}
+            style={{
+              ...buttonStyle,
+              opacity: busy || !email.trim() || password.length < 1 ? 0.6 : 1,
+            }}
+          >
+            {busy ? "Signing in…" : "Log in"}
+          </button>
+
+          <a
+            href={`/signup?next=${encodeURIComponent(next)}`}
+            style={{
+              textAlign: "center",
+              marginTop: 6,
               color: "white",
+              opacity: 0.9,
+              textDecoration: "underline",
               fontSize: 13,
             }}
           >
-            {msg}
-          </div>
-        )}
-
-        <div style={{ marginTop: 14, fontSize: 13, opacity: 0.85 }}>
-          Need an account?{" "}
-          <Link href="/signup" style={{ color: "white", fontWeight: 800, textDecoration: "underline" }}>
-            Create one
-          </Link>
+            Need an account? Sign up
+          </a>
         </div>
       </div>
     </main>
   );
 }
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "12px 12px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.18)",
+  outline: "none",
+  background: "rgba(0,0,0,0.18)",
+  color: "white",
+};
+
+const buttonStyle: React.CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(255,255,255,0.14)",
+  color: "white",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
 
 
 
