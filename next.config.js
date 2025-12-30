@@ -1,8 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  experimental: {
-    serverComponentsExternalPackages: ["stripe", "@supabase/supabase-js"],
-  },
-}
+  reactStrictMode: true,
 
-module.exports = nextConfig
+  // IMPORTANT:
+  // Do NOT use `output: "export"` for this app (it breaks auth + API routes).
+  // Vercel deploy should be normal Next.js server build.
+};
+
+module.exports = nextConfig;
