@@ -1,4 +1,3 @@
-// lib/supabase-server.ts
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 const supabaseUrl =
@@ -32,6 +31,7 @@ export function supabaseServer(): SupabaseClient {
 
 // Some of your older files used this name:
 export const supabaseRoute = supabaseServer;
+
 
 
 
