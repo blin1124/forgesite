@@ -15,10 +15,9 @@ export default function CallbackPage() {
 
     const run = async () => {
       try {
-        // ✅ supabaseBrowser is a function — call it to get the client
-        const client = supabaseBrowser();
+        const sb = supabaseBrowser(); // ✅ CALL IT
 
-        const { data, error } = await client.auth.getSession();
+        const { data, error } = await sb.auth.getSession();
 
         if (error) {
           console.error("Callback getSession error:", error.message);
