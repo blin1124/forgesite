@@ -8,8 +8,11 @@ export async function POST(req: Request) {
     const body = await req.json();
     const owner_email = String(body.owner_email || "").trim().toLowerCase();
 
-    if (!owner_email) return new NextResponse("Missing owner_email", { status: 400 });
+    if (!owner_email) {
+      return new NextResponse("Missing owner_email", { status: 400 });
+    }
 
+    // supabaseAdmin is an object (do NOT call it)
     const supa = supabaseAdmin;
 
     const { data: owner, error: e1 } = await supa
@@ -29,7 +32,11 @@ export async function POST(req: Request) {
 
     if (e2) return new NextResponse(e2.message, { status: 500 });
 
-    return NextResponse.json({ ok: true, team_id: owner.team_id, members: members || [] });
+    return NextResponse.json({
+      ok: true,
+      team_id: owner.team_id,
+      members: members || [],
+    });
   } catch (err: any) {
     return new NextResponse(err?.message || "List failed", { status: 500 });
   }
