@@ -1,93 +1,123 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
-import { supabaseBrowser } from "@/lib/supabase-browser"
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { supabaseBrowser } from "@/lib/supabase-browser";
 
 export default function Navbar() {
-  const router = useRouter()
-  const [email, setEmail] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [email, setEmail] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let mounted = true;
+
     const load = async () => {
-      setLoading(true)
-      const { data } = await supabaseBrowser.auth.getSession()
-      setEmail(data?.session?.user?.email ?? null)
-      setLoading(false)
-    }
+      try {
+        setLoading(true);
 
-    load()
+        // ✅ Works whether supabaseBrowser is used as object or function,
+        // but with the new hybrid export, this is safest/cleanest:
+        const { data } = await supabaseBrowser.auth.getSession();
 
-    const { data: sub } = supabaseBrowser.auth.onAuthStateChange(() => {
-      load()
-    })
+        if (!mounted) return;
+        setEmail(data?.session?.user?.email ?? null);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    };
+
+    load();
+
+    // Optional: keep nav reactive if session changes
+    const { data: sub } = supabaseBrowser.auth.onAuthStateChange(() => load());
 
     return () => {
-      sub?.subscription?.unsubscribe()
-    }
-  }, [])
+      mounted = false;
+      sub?.subscription?.unsubscribe();
+    };
+  }, []);
 
-  const go = (path: string) => router.push(path)
-
-  const signOut = async () => {
-    await supabaseBrowser.auth.signOut()
-    router.push("/login")
+  async function signOut() {
+    await supabaseBrowser.auth.signOut();
+    window.location.href = "/login";
   }
 
   return (
-    <header className="w-full border-b">
-      <div className="mx-auto flex max-w-6xl items-center justify-between p-4">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => go("/")}
-            className="text-sm font-semibold"
-            type="button"
-          >
-            Forgesite
-          </button>
+    <div
+      style={{
+        position: "sticky",
+        top: 0,
+        zIndex: 50,
+        padding: "12px 18px",
+        borderBottom: "1px solid rgba(255,255,255,0.12)",
+        background: "rgba(17,24,39,0.75)",
+        backdropFilter: "blur(10px)",
+        color: "white",
+      }}
+    >
+      <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <Link href="/" style={{ color: "white", textDecoration: "none", fontWeight: 900 }}>
+          ForgeSite
+        </Link>
 
-          <nav className="flex items-center gap-3 text-sm text-gray-700">
-            <button onClick={() => go("/account")} type="button">
-              Account
-            </button>
-            <button onClick={() => go("/settings")} type="button">
-              Settings
-            </button>
-            <button onClick={() => go("/billing")} type="button">
-              Billing
-            </button>
-          </nav>
-        </div>
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <Link href="/builder" style={navLink}>
+            Builder
+          </Link>
+          <Link href="/sites" style={navLink}>
+            Sites
+          </Link>
+          <Link href="/billing" style={navLink}>
+            Billing
+          </Link>
 
-        <div className="flex items-center gap-3">
           {loading ? (
-            <span className="text-sm text-gray-500">Loading…</span>
+            <span style={{ opacity: 0.8, fontSize: 13 }}>Loading…</span>
           ) : email ? (
             <>
-              <span className="text-sm text-gray-700">{email}</span>
-              <button
-                onClick={signOut}
-                className="rounded bg-black px-3 py-2 text-sm text-white"
-                type="button"
-              >
+              <span style={{ opacity: 0.9, fontSize: 13 }}>{email}</span>
+              <button onClick={signOut} style={btn}>
                 Sign out
               </button>
             </>
           ) : (
-            <button
-              onClick={() => go("/login")}
-              className="rounded bg-black px-3 py-2 text-sm text-white"
-              type="button"
-            >
-              Log in
-            </button>
+            <Link href="/login" style={btnLink}>
+              Login
+            </Link>
           )}
         </div>
       </div>
-    </header>
-  )
+    </div>
+  );
 }
+
+const navLink: React.CSSProperties = {
+  color: "white",
+  textDecoration: "none",
+  fontWeight: 700,
+  opacity: 0.92,
+  fontSize: 14,
+};
+
+const btn: React.CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(255,255,255,0.10)",
+  color: "white",
+  fontWeight: 800,
+  cursor: "pointer",
+};
+
+const btnLink: React.CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(255,255,255,0.10)",
+  color: "white",
+  fontWeight: 800,
+  textDecoration: "none",
+};
 
 
 
