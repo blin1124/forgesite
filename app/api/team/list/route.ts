@@ -1,17 +1,37 @@
-./app/api/team/list/route.ts
-Error: 
-  x Unexpected character '▲'
-   ,-[/vercel/path0/app/api/team/list/route.ts:1:1]
- 1 | https://nextjs.org/telemetry
- 2 |   ▲ Next.js 14.2.35
-   :   ^
- 3 |    Creating an optimized production build ...
- 4 |  ✓ Compiled successfully
- 5 |    Linting and checking validity of types ...
-   `----
-Caused by:
-    Syntax Error
-Import trace for requested module:
-./app/api/team/list/route.ts
-> Build failed because of webpack errors
-Error: Command "npm run build" exited with 1
+import { NextResponse } from "next/server";
+import { supabaseAdmin } from "@/lib/supabase";
+
+export const runtime = "nodejs";
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const owner_email = String(body.owner_email || "").trim().toLowerCase();
+
+    if (!owner_email) return new NextResponse("Missing owner_email", { status: 400 });
+
+    const supa = supabaseAdmin;
+
+    const { data: owner, error: e1 } = await supa
+      .from("entitlements")
+      .select("team_id, role")
+      .eq("email", owner_email)
+      .maybeSingle();
+
+    if (e1 || !owner || owner.role !== "owner") {
+      return new NextResponse("Not owner or no team", { status: 403 });
+    }
+
+    const { data: members, error: e2 } = await supa
+      .from("entitlements")
+      .select("email, role")
+      .eq("team_id", owner.team_id);
+
+    if (e2) return new NextResponse(e2.message, { status: 500 });
+
+    return NextResponse.json({ ok: true, team_id: owner.team_id, members: members || [] });
+  } catch (err: any) {
+    return new NextResponse(err?.message || "List failed", { status: 500 });
+  }
+}
+
