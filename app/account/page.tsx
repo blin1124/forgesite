@@ -1,26 +1,44 @@
-import ConnectAIKey from "@/components/ConnectAIKey"
+"use client";
+
+import { useEffect, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+export const dynamic = "force-dynamic";
+
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+  return createClient(url, anon);
+}
 
 export default function AccountPage() {
+  const [email, setEmail] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    const run = async () => {
+      try {
+        const supabase = getSupabase();
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        setEmail(data?.session?.user?.email ?? null);
+      } catch (e: any) {
+        setErr(e?.message || "Failed to load session");
+      }
+    };
+    run();
+  }, []);
+
   return (
-    <main className="mx-auto max-w-3xl space-y-6 p-6">
-      <div className="space-y-1">
-        <h1 className="text-2xl font-semibold">Account</h1>
-        <p className="text-sm text-gray-600">
-          Manage your API keys and settings.
-        </p>
-      </div>
-
-      <section className="rounded border p-4">
-        <h2 className="mb-2 text-lg font-semibold">Connect your OpenAI key</h2>
-        <p className="mb-4 text-sm text-gray-600">
-          Save your OpenAI API key so Forgesite can generate and manage website projects.
-        </p>
-
-        {/* ✅ FIX: no user prop */}
-        <ConnectAIKey />
-      </section>
+    <main style={{ minHeight: "100vh", padding: 24, fontFamily: "system-ui" }}>
+      <h1 style={{ fontSize: 22, fontWeight: 800 }}>Account</h1>
+      {err ? <p style={{ color: "crimson" }}>{err}</p> : null}
+      <p style={{ opacity: 0.85 }}>{email ? `Signed in as ${email}` : "Not signed in"}</p>
+      <p style={{ marginTop: 12 }}>
+        <a href="/settings" style={{ textDecoration: "underline" }}>Settings</a>
+      </p>
     </main>
-  )
+  );
 }
 
 
