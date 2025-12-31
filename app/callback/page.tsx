@@ -1,6 +1,6 @@
-export const dynamic = "force-dynamic";
+import CallbackClient from "./Client";
 
-import CallbackClient from "./CallbackClient";
+export const dynamic = "force-dynamic";
 
 export default function CallbackPage() {
   return <CallbackClient />;
