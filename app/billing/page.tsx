@@ -1,10 +1,11 @@
-export const dynamic = "force-dynamic";
+import BillingClient from "./Client";
 
-import BillingClient from "./BillingClient";
+export const dynamic = "force-dynamic";
 
 export default function BillingPage() {
   return <BillingClient />;
 }
+
 
 
 
