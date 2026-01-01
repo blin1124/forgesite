@@ -1,84 +1,88 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { stripe } from "@/lib/stripe";
+import { cookies } from "next/headers";
+import { createServerClient } from "@supabase/ssr";
 
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
-function getOrigin(req: Request) {
-  // Vercel + local safe origin detection
-  const fromHeader = req.headers.get("origin");
-  if (fromHeader) return fromHeader;
-
-  const url = process.env.NEXT_PUBLIC_APP_URL || process.env.NEXT_PUBLIC_SITE_URL;
-  if (url) return url.replace(/\/$/, "");
-
-  return "http://localhost:3000";
+function jsonError(message: string, status = 400) {
+  return NextResponse.json({ error: message }, { status });
 }
 
 export async function POST(req: Request) {
   try {
-    const origin = getOrigin(req);
+    const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
+    const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID;
+    const APP_URL = process.env.NEXT_PUBLIC_APP_URL;
 
-    // 🔑 MUST exist in Vercel env vars
-    const priceId =
-      process.env.STRIPE_PRICE_ID ||
-      process.env.STRIPE_PRO_PRICE_ID ||
-      process.env.STRIPE_SUBSCRIPTION_PRICE_ID;
+    if (!STRIPE_SECRET_KEY) return jsonError("Missing STRIPE_SECRET_KEY", 500);
+    if (!STRIPE_PRICE_ID) return jsonError("Missing STRIPE_PRICE_ID", 500);
+    if (!APP_URL) return jsonError("Missing NEXT_PUBLIC_APP_URL", 500);
 
-    if (!process.env.STRIPE_SECRET_KEY) {
-      return NextResponse.json(
-        { error: "Missing STRIPE_SECRET_KEY in environment variables." },
-        { status: 500 }
-      );
-    }
-
-    if (!priceId) {
-      return NextResponse.json(
-        {
-          error:
-            "Missing Stripe price id. Set STRIPE_PRICE_ID (or STRIPE_PRO_PRICE_ID) in environment variables.",
-        },
-        { status: 500 }
-      );
-    }
-
-    // Body optional, but supports next redirect
-    let body: any = {};
+    // Read optional body for next path (safe default)
+    let nextPath = "/builder";
     try {
-      body = await req.json();
+      const body = await req.json();
+      if (body?.next && typeof body.next === "string") {
+        nextPath = body.next.startsWith("/") ? body.next : `/${body.next}`;
+      }
     } catch {
-      body = {};
+      // body may be empty — totally fine
     }
 
-    const nextPath = typeof body?.next === "string" && body.next.trim() ? body.next.trim() : "/builder";
-    const successUrl = `${origin}/pro/success?next=${encodeURIComponent(nextPath)}`;
-    const cancelUrl = `${origin}/billing?next=${encodeURIComponent(nextPath)}`;
+    // Supabase server client (uses auth cookie from the browser)
+    const cookieStore = cookies();
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-    // Create Stripe Checkout Session
-    const session = await stripe.checkout.sessions.create({
-      mode: "subscription",
-      line_items: [{ price: priceId, quantity: 1 }],
-      success_url: successUrl,
-      cancel_url: cancelUrl,
+    if (!supabaseUrl || !supabaseAnon) {
+      return jsonError("Missing Supabase public env vars", 500);
+    }
 
-      // Optional: if you start passing email from client, this helps Stripe prefill
-      customer_email: typeof body?.email === "string" ? body.email : undefined,
-
-      // Helpful metadata for webhook / debugging
-      metadata: {
-        next: nextPath,
-        app: "forgesite",
+    const supabase = createServerClient(supabaseUrl, supabaseAnon, {
+      cookies: {
+        get(name: string) {
+          return cookieStore.get(name)?.value;
+        },
+        set(name: string, value: string, options: any) {
+          cookieStore.set({ name, value, ...options });
+        },
+        remove(name: string, options: any) {
+          cookieStore.set({ name, value: "", ...options });
+        },
       },
     });
 
-    if (!session.url) {
-      return NextResponse.json({ error: "Stripe did not return a checkout URL." }, { status: 500 });
-    }
+    const { data: userData, error: userErr } = await supabase.auth.getUser();
+    if (userErr) return jsonError(`Auth error: ${userErr.message}`, 401);
+    const user = userData?.user;
+    if (!user) return jsonError("Not logged in", 401);
+
+    const stripe = new Stripe(STRIPE_SECRET_KEY);
+
+    const successUrl = `${APP_URL}${nextPath}${nextPath.includes("?") ? "&" : "?"}checkout=success`;
+    const cancelUrl = `${APP_URL}/billing?next=${encodeURIComponent(nextPath)}`;
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+
+      // Helps you match Stripe events back to the logged-in user
+      client_reference_id: user.id,
+      customer_email: user.email ?? undefined,
+      metadata: {
+        supabase_user_id: user.id,
+        supabase_email: user.email ?? "",
+      },
+    });
+
+    if (!session.url) return jsonError("Stripe did not return a checkout URL", 500);
 
     return NextResponse.json({ url: session.url });
   } catch (err: any) {
-    console.error("Checkout error:", err);
+    // Always return JSON (never HTML)
     return NextResponse.json(
       { error: err?.message || "Checkout failed" },
       { status: 500 }
