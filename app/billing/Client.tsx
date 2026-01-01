@@ -1,30 +1,40 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 
 function getSupabase() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-  if (!url || !anon) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
+  if (!url || !anon) {
+    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
+  }
   return createClient(url, anon);
+}
+
+function isProbablyHtml(s: string) {
+  const t = (s || "").trim().toLowerCase();
+  return t.startsWith("<!doctype") || t.startsWith("<html") || t.includes("<head") || t.includes("<body");
 }
 
 export default function BillingClient() {
   const router = useRouter();
   const sp = useSearchParams();
-  const next = sp.get("next") || "/builder";
+
+  const next = useMemo(() => sp.get("next") || "/builder", [sp]);
 
   const [email, setEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const run = async () => {
       try {
         const supabase = getSupabase();
-        const { data } = await supabase.auth.getSession();
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
         setEmail(data?.session?.user?.email ?? null);
       } catch {
         setEmail(null);
@@ -37,25 +47,64 @@ export default function BillingClient() {
 
   async function goCheckout() {
     setMsg(null);
-    try {
-      // This endpoint should create Stripe Checkout and return { url }
-      const res = await fetch("/api/checkout", { method: "POST" });
-      const text = await res.text();
 
-      // If it returned JSON, parse it safely
-      let data: any = null;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        throw new Error(text || "Checkout failed");
+    // If not signed in, push them to login first (keeps your paywall flow sane)
+    if (!email && !loading) {
+      router.push(`/login?next=${encodeURIComponent(`/billing?next=${encodeURIComponent(next)}`)}`);
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const res = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ next }),
+        redirect: "manual", // IMPORTANT: lets us detect redirects instead of auto-following to HTML
+      });
+
+      // 1) If server replied with a redirect, send browser there
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get("location");
+        if (loc) {
+          window.location.href = loc;
+          return;
+        }
       }
 
-      if (!res.ok) throw new Error(data?.error || "Checkout failed");
-      if (!data?.url) throw new Error("Missing checkout URL");
+      // 2) If it returned JSON { url }, use it
+      const contentType = res.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        const data = await res.json().catch(() => null);
 
-      window.location.href = data.url;
+        if (!res.ok) {
+          throw new Error(data?.error || data?.message || "Checkout failed");
+        }
+
+        if (data?.url) {
+          window.location.href = data.url;
+          return;
+        }
+
+        throw new Error("Checkout did not return a URL");
+      }
+
+      // 3) Otherwise read text, but NEVER display raw HTML
+      const text = await res.text().catch(() => "");
+      console.error("Checkout non-JSON response:", { status: res.status, text });
+
+      if (isProbablyHtml(text)) {
+        throw new Error("Checkout returned an unexpected page (not JSON). This usually means the API redirected or errored.");
+      }
+
+      throw new Error(text || "Checkout failed");
     } catch (e: any) {
-      setMsg(e?.message || "Checkout failed");
+      const message = String(e?.message || "Checkout failed");
+
+      // Final safety: never print HTML in the UI
+      setMsg(isProbablyHtml(message) ? "Checkout failed (unexpected HTML response)." : message);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -89,7 +138,15 @@ export default function BillingClient() {
         </p>
 
         <div style={{ marginTop: 12, opacity: 0.9, fontSize: 14 }}>
-          {loading ? "Checking session…" : email ? <>Signed in as <b>{email}</b></> : "Not signed in (login first)."}
+          {loading ? (
+            "Checking session…"
+          ) : email ? (
+            <>
+              Signed in as <b>{email}</b>
+            </>
+          ) : (
+            "Not signed in (login first)."
+          )}
         </div>
 
         {msg ? (
@@ -107,8 +164,8 @@ export default function BillingClient() {
         ) : null}
 
         <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
-          <button onClick={goCheckout} style={primaryBtn}>
-            Subscribe
+          <button onClick={goCheckout} disabled={busy || loading} style={{ ...primaryBtn, opacity: busy || loading ? 0.7 : 1 }}>
+            {busy ? "Starting checkout…" : "Subscribe"}
           </button>
 
           <button
@@ -131,7 +188,7 @@ export default function BillingClient() {
             Privacy
           </button>
 
-          <button onClick={() => router.push("/login?next=/billing")} style={secondaryBtn}>
+          <button onClick={() => router.push(`/login?next=${encodeURIComponent(`/billing?next=${encodeURIComponent(next)}`)}`)} style={secondaryBtn}>
             Back to login
           </button>
         </div>
@@ -159,3 +216,4 @@ const secondaryBtn: React.CSSProperties = {
   fontWeight: 800,
   cursor: "pointer",
 };
+
