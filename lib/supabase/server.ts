@@ -1,8 +1,7 @@
-// lib/supabase/server.ts
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 
-export function createSupabaseServerClient() {
+export function supabaseServer() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
@@ -14,7 +13,6 @@ export function createSupabaseServerClient() {
         return cookieStore.get(name)?.value;
       },
       set(name: string, value: string, options: any) {
-        // Route Handlers can set cookies
         cookieStore.set({ name, value, ...options });
       },
       remove(name: string, options: any) {
