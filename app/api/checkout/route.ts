@@ -6,26 +6,33 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
-function getAppUrl(req: Request) {
-  // Prefer env in prod; fallback to request origin
+function appUrl(req: Request) {
   return process.env.NEXT_PUBLIC_APP_URL || new URL(req.url).origin;
 }
 
 export async function POST(req: Request) {
   try {
-    const { next } = await req.json().catch(() => ({ next: "/builder" }));
+    const body = await req.json().catch(() => ({}));
+    const next = typeof body?.next === "string" ? body.next : "/builder";
 
+    // ✅ This MUST read the Supabase auth cookie on the server
     const supabase = createSupabaseServerClient();
-    const { data } = await supabase.auth.getUser();
-    const user = data?.user;
-    if (!user) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+    const { data: userData, error: userErr } = await supabase.auth.getUser();
 
-    // Ensure profile exists + has stripe_customer_id
-    const { data: prof } = await supabaseAdmin
+    if (userErr || !userData?.user) {
+      return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+    }
+
+    const user = userData.user;
+
+    // Ensure we have a Stripe customer id stored
+    const { data: prof, error: profErr } = await supabaseAdmin
       .from("profiles")
       .select("stripe_customer_id")
       .eq("id", user.id)
       .maybeSingle();
+
+    if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
 
     let customerId = prof?.stripe_customer_id || null;
 
@@ -34,18 +41,21 @@ export async function POST(req: Request) {
         email: user.email || undefined,
         metadata: { supabase_user_id: user.id },
       });
+
       customerId = customer.id;
 
-      await supabaseAdmin
+      const { error: upsertErr } = await supabaseAdmin
         .from("profiles")
         .upsert({
           id: user.id,
           stripe_customer_id: customerId,
           updated_at: new Date().toISOString(),
         });
+
+      if (upsertErr) return NextResponse.json({ error: upsertErr.message }, { status: 500 });
     }
 
-    const appUrl = getAppUrl(req);
+    const url = appUrl(req);
 
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
@@ -53,22 +63,20 @@ export async function POST(req: Request) {
       line_items: [{ price: process.env.STRIPE_PRICE_ID!, quantity: 1 }],
       allow_promotion_codes: true,
 
-      // IMPORTANT: this lets webhook map Stripe -> Supabase user reliably
+      // ✅ helps webhooks map Stripe -> Supabase user
       metadata: { supabase_user_id: user.id },
+      subscription_data: { metadata: { supabase_user_id: user.id } },
 
-      subscription_data: {
-        metadata: { supabase_user_id: user.id },
-      },
-
-      success_url: `${appUrl}/billing?success=1&next=${encodeURIComponent(next || "/builder")}`,
-      cancel_url: `${appUrl}/billing?canceled=1&next=${encodeURIComponent(next || "/builder")}`,
+      success_url: `${url}/billing?success=1&next=${encodeURIComponent(next)}`,
+      cancel_url: `${url}/billing?canceled=1&next=${encodeURIComponent(next)}`,
     });
 
     return NextResponse.json({ url: session.url });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Checkout error" }, { status: 500 });
+    return NextResponse.json({ error: e?.message || "Checkout failed" }, { status: 500 });
   }
 }
+
 
 
 
