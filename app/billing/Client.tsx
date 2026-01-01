@@ -7,24 +7,21 @@ import { createClient } from "@supabase/supabase-js";
 function getSupabase() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-  if (!url || !anon) {
-    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
-  }
+  if (!url || !anon) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
   return createClient(url, anon);
 }
 
 export default function BillingClient() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-
-  const next = searchParams.get("next") || "/builder";
+  const sp = useSearchParams();
+  const next = sp.get("next") || "/builder";
 
   const [email, setEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    const loadSession = async () => {
+    const run = async () => {
       try {
         const supabase = getSupabase();
         const { data } = await supabase.auth.getSession();
@@ -35,44 +32,48 @@ export default function BillingClient() {
         setLoading(false);
       }
     };
-
-    loadSession();
+    run();
   }, []);
 
   async function goCheckout() {
-    setError(null);
+    setMsg(null);
 
     try {
+      const supabase = getSupabase();
+      const { data, error } = await supabase.auth.getSession();
+
+      if (error || !data?.session?.access_token) {
+        setMsg("You must be logged in.");
+        router.push(`/login?next=${encodeURIComponent("/billing?next=" + encodeURIComponent(next))}`);
+        return;
+      }
+
+      const token = data.session.access_token;
+
       const res = await fetch("/api/checkout", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          next,
-          email,
-        }),
-        redirect: "manual",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ next }),
       });
 
-      const text = await res.text();
-
-      let data: any;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        throw new Error(text || "Checkout failed");
-      }
+      const json = await res.json().catch(() => null);
 
       if (!res.ok) {
-        throw new Error(data?.error || "Checkout failed");
+        setMsg(json?.error || json || "Checkout failed");
+        return;
       }
 
-      if (!data?.url) {
-        throw new Error("Stripe checkout URL missing");
+      if (!json?.url) {
+        setMsg("Checkout failed (missing URL).");
+        return;
       }
 
-      window.location.href = data.url;
-    } catch (err: any) {
-      setError(err?.message || "Checkout failed");
+      window.location.href = json.url;
+    } catch (e: any) {
+      setMsg(e?.message || "Checkout failed");
     }
   }
 
@@ -101,42 +102,29 @@ export default function BillingClient() {
         }}
       >
         <h1 style={{ margin: 0, fontSize: 28, fontWeight: 900 }}>Billing</h1>
-
         <p style={{ marginTop: 8, opacity: 0.9 }}>
-          Subscribe to access the Builder. After payment you’ll return to{" "}
-          <b>{next}</b>
+          Subscribe to access the Builder. After payment you’ll return to: <b>{next}</b>
         </p>
 
-        <div style={{ marginTop: 12, fontSize: 14, opacity: 0.9 }}>
-          {loading
-            ? "Checking session…"
-            : email
-            ? <>Signed in as <b>{email}</b></>
-            : "Not signed in (login required)."}
+        <div style={{ marginTop: 12, opacity: 0.9, fontSize: 14 }}>
+          {loading ? "Checking session…" : email ? <>Signed in as <b>{email}</b></> : "Not signed in (login first)."}
         </div>
 
-        {error && (
+        {msg ? (
           <div
             style={{
               marginTop: 12,
               padding: 12,
               borderRadius: 12,
-              background: "rgba(185, 28, 28, 0.25)",
-              border: "1px solid rgba(185, 28, 28, 0.5)",
+              background: "rgba(185, 28, 28, .25)",
+              border: "1px solid rgba(185, 28, 28, .5)",
             }}
           >
-            {error}
+            {msg}
           </div>
-        )}
+        ) : null}
 
-        <div
-          style={{
-            display: "flex",
-            gap: 10,
-            marginTop: 16,
-            flexWrap: "wrap",
-          }}
-        >
+        <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
           <button onClick={goCheckout} style={primaryBtn}>
             Subscribe
           </button>
@@ -155,10 +143,7 @@ export default function BillingClient() {
             Privacy
           </button>
 
-          <button
-            onClick={() => router.push(`/login?next=${encodeURIComponent(next)}`)}
-            style={secondaryBtn}
-          >
+          <button onClick={() => router.push("/login?next=/billing")} style={secondaryBtn}>
             Back to login
           </button>
         </div>
@@ -186,6 +171,8 @@ const secondaryBtn: React.CSSProperties = {
   fontWeight: 800,
   cursor: "pointer",
 };
+
+
 
 
 
