@@ -1,94 +1,88 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { cookies } from "next/headers";
-import { createServerClient } from "@supabase/ssr";
+import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-function jsonError(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status });
+function getAdminSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  if (!url || !serviceRole) {
+    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+  }
+  return createClient(url, serviceRole, {
+    auth: { persistSession: false },
+  });
+}
+
+function getStripe() {
+  const key = process.env.STRIPE_SECRET_KEY!;
+  if (!key) throw new Error("Missing STRIPE_SECRET_KEY");
+  return new Stripe(key, {
+    // keep this simple; don’t pin to a typed apiVersion string that causes build failures
+    apiVersion: "2025-12-15.clover",
+  } as any);
 }
 
 export async function POST(req: Request) {
   try {
-    const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
-    const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID;
-    const APP_URL = process.env.NEXT_PUBLIC_APP_URL;
+    const stripe = getStripe();
+    const supabaseAdmin = getAdminSupabase();
 
-    if (!STRIPE_SECRET_KEY) return jsonError("Missing STRIPE_SECRET_KEY", 500);
-    if (!STRIPE_PRICE_ID) return jsonError("Missing STRIPE_PRICE_ID", 500);
-    if (!APP_URL) return jsonError("Missing NEXT_PUBLIC_APP_URL", 500);
+    const authHeader = req.headers.get("authorization") || "";
+    const token = authHeader.toLowerCase().startsWith("bearer ")
+      ? authHeader.slice(7).trim()
+      : "";
 
-    // Read optional body for next path (safe default)
+    if (!token) {
+      return new NextResponse("Auth session missing!", { status: 401 });
+    }
+
+    const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
+    if (userErr || !userData?.user?.id) {
+      return new NextResponse("Auth session missing!", { status: 401 });
+    }
+
+    const user = userData.user;
+
+    // Optional body: { next: "/builder" }
     let nextPath = "/builder";
     try {
       const body = await req.json();
-      if (body?.next && typeof body.next === "string") {
-        nextPath = body.next.startsWith("/") ? body.next : `/${body.next}`;
-      }
+      if (body?.next) nextPath = String(body.next);
     } catch {
-      // body may be empty — totally fine
+      // ignore if no JSON body
     }
 
-    // Supabase server client (uses auth cookie from the browser)
-    const cookieStore = cookies();
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const origin =
+      process.env.NEXT_PUBLIC_APP_URL ||
+      req.headers.get("origin") ||
+      "https://forgesite-seven.vercel.app";
 
-    if (!supabaseUrl || !supabaseAnon) {
-      return jsonError("Missing Supabase public env vars", 500);
-    }
+    const priceId = process.env.STRIPE_PRICE_ID!;
+    if (!priceId) throw new Error("Missing STRIPE_PRICE_ID");
 
-    const supabase = createServerClient(supabaseUrl, supabaseAnon, {
-      cookies: {
-        get(name: string) {
-          return cookieStore.get(name)?.value;
-        },
-        set(name: string, value: string, options: any) {
-          cookieStore.set({ name, value, ...options });
-        },
-        remove(name: string, options: any) {
-          cookieStore.set({ name, value: "", ...options });
-        },
-      },
-    });
-
-    const { data: userData, error: userErr } = await supabase.auth.getUser();
-    if (userErr) return jsonError(`Auth error: ${userErr.message}`, 401);
-    const user = userData?.user;
-    if (!user) return jsonError("Not logged in", 401);
-
-    const stripe = new Stripe(STRIPE_SECRET_KEY);
-
-    const successUrl = `${APP_URL}${nextPath}${nextPath.includes("?") ? "&" : "?"}checkout=success`;
-    const cancelUrl = `${APP_URL}/billing?next=${encodeURIComponent(nextPath)}`;
-
+    // Create Stripe Checkout session
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
-      line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
-      success_url: successUrl,
-      cancel_url: cancelUrl,
-
-      // Helps you match Stripe events back to the logged-in user
-      client_reference_id: user.id,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${origin}${nextPath}?checkout=success`,
+      cancel_url: `${origin}/billing?checkout=cancel`,
       customer_email: user.email ?? undefined,
       metadata: {
-        supabase_user_id: user.id,
-        supabase_email: user.email ?? "",
+        user_id: user.id,
       },
     });
-
-    if (!session.url) return jsonError("Stripe did not return a checkout URL", 500);
 
     return NextResponse.json({ url: session.url });
   } catch (err: any) {
-    // Always return JSON (never HTML)
     return NextResponse.json(
       { error: err?.message || "Checkout failed" },
       { status: 500 }
     );
   }
 }
+
 
 
 
