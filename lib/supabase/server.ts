@@ -1,9 +1,12 @@
+// lib/supabase/server.ts
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
-export function supabaseServer() {
+function makeClient(): SupabaseClient {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  if (!url || !anon) throw new Error("Missing Supabase env vars");
 
   const cookieStore = cookies();
 
@@ -21,4 +24,14 @@ export function supabaseServer() {
     },
   });
 }
+
+// ✅ Export BOTH names so ANY file you already have will work
+export function supabaseServer() {
+  return makeClient();
+}
+
+export function createSupabaseServerClient() {
+  return makeClient();
+}
+
 
