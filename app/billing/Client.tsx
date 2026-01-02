@@ -45,8 +45,8 @@ export default function BillingClient() {
 
     try {
       if (!accessToken) {
-        setMsg("Not signed in. Please log in again.");
-        router.push(`/login?next=${encodeURIComponent("/billing?next=" + encodeURIComponent(next))}`);
+        setMsg("Not signed in");
+        router.push("/login?next=%2Fbilling");
         return;
       }
 
@@ -63,12 +63,17 @@ export default function BillingClient() {
       try {
         data = JSON.parse(text);
       } catch {
-        // if server sent plain text/html, show it
+        // if it isn't JSON, show raw text
         throw new Error(text || "Checkout failed");
       }
 
-      if (!res.ok) throw new Error(data?.error || "Checkout failed");
-      if (!data?.url) throw new Error("Missing checkout URL");
+      if (!res.ok) {
+        throw new Error(data?.error || "Checkout failed");
+      }
+
+      if (!data?.url) {
+        throw new Error("Missing checkout URL");
+      }
 
       window.location.href = data.url;
     } catch (e: any) {
@@ -101,12 +106,13 @@ export default function BillingClient() {
         }}
       >
         <h1 style={{ margin: 0, fontSize: 28, fontWeight: 900 }}>Billing</h1>
+
         <p style={{ marginTop: 8, opacity: 0.9 }}>
           Subscribe to access the Builder. After payment you’ll return to: <b>{next}</b>
         </p>
 
         <div style={{ marginTop: 12, opacity: 0.9, fontSize: 14 }}>
-          {loading ? "Checking session…" : email ? <>Signed in as <b>{email}</b></> : "Not signed in (login first)."}
+          {loading ? "Checking session…" : email ? <>Signed in as <b>{email}</b></> : "Not signed in"}
         </div>
 
         {msg ? (
@@ -164,6 +170,7 @@ const secondaryBtn: React.CSSProperties = {
   fontWeight: 800,
   cursor: "pointer",
 };
+
 
 
 
