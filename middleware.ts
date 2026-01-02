@@ -1,20 +1,17 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
 
-  /**
-   * 0) Never protect API routes (fixes /api/checkout redirecting to /login)
-   */
+  // ✅ 1) NEVER protect API routes (fixes /api/checkout redirecting to /login)
   if (pathname.startsWith("/api")) {
     return NextResponse.next();
   }
 
-  /**
-   * 1) Allow Next.js internals + static assets
-   */
+  // ✅ 2) Allow Next.js internals + static assets
   if (
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon.ico") ||
@@ -23,9 +20,7 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  /**
-   * 2) Public routes: always accessible
-   */
+  // ✅ 3) Public pages that must remain accessible
   const publicPaths = [
     "/",
     "/login",
@@ -35,33 +30,14 @@ export async function middleware(req: NextRequest) {
     "/auth/callback",
     "/terms",
     "/privacy",
+    "/pro/success",
   ];
 
   if (publicPaths.includes(pathname)) {
     return NextResponse.next();
   }
 
-  /**
-   * 3) Routes that REQUIRE an active subscription
-   *    Add/remove anything you want to gate.
-   */
-  const paidPrefixes = [
-    "/builder",
-    "/sites",
-    "/templates",
-    "/settings",
-    "/domain",
-    "/account", // if you want account behind paywall; remove if not
-    "/team",    // optional
-  ];
-
-  const isPaidRoute = paidPrefixes.some((p) =>
-    pathname === p || pathname.startsWith(p + "/")
-  );
-
-  /**
-   * 4) Create Supabase server client using cookies
-   */
+  // ✅ 4) Supabase session check for everything else
   const res = NextResponse.next();
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -81,12 +57,10 @@ export async function middleware(req: NextRequest) {
     },
   });
 
-  /**
-   * 5) Auth gate: if not logged in, go to /login?next=...
-   */
-  const { data: userData } = await supabase.auth.getUser();
-  const user = userData?.user;
+  const { data } = await supabase.auth.getUser();
+  const user = data?.user;
 
+  // Not logged in -> login
   if (!user) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
@@ -94,27 +68,32 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  /**
-   * 6) Entitlement gate (only for paid routes)
-   *    Requires entitlements row with status = "active"
-   *    AND current_period_end is null OR in the future.
-   */
-  if (isPaidRoute) {
-    const nowIso = new Date().toISOString();
+  // ✅ 5) Entitlement gate: builder + other protected pages require active entitlement
+  // Adjust this list to whatever should be paid-only.
+  const paidOnlyPrefixes = ["/builder", "/sites", "/templates", "/team", "/settings", "/uploads", "/domain"];
 
-    const { data: ent, error } = await supabase
+  const isPaidOnly = paidOnlyPrefixes.some(
+    (p) => pathname === p || pathname.startsWith(p + "/")
+  );
+
+  if (isPaidOnly) {
+    // Check entitlement in DB (service role)
+    const { data: ent } = await supabaseAdmin
       .from("entitlements")
       .select("status,current_period_end")
       .eq("user_id", user.id)
       .maybeSingle();
 
-    const isActive =
-      !error &&
-      ent &&
-      ent.status === "active" &&
-      (!ent.current_period_end || ent.current_period_end > nowIso);
+    const status = (ent?.status || "").toLowerCase();
+    const cpe = ent?.current_period_end ? new Date(ent.current_period_end).getTime() : null;
+    const now = Date.now();
 
-    if (!isActive) {
+    const active =
+      status === "active" ||
+      status === "trialing" ||
+      (status === "past_due" && cpe && cpe > now); // optional leniency
+
+    if (!active) {
       const url = req.nextUrl.clone();
       url.pathname = "/billing";
       url.search = `?next=${encodeURIComponent(pathname + search)}`;
@@ -122,18 +101,14 @@ export async function middleware(req: NextRequest) {
     }
   }
 
-  /**
-   * 7) Allowed through (authed + entitled if required)
-   */
   return res;
 }
 
-/**
- * Apply middleware broadly, but we early-return above for /api and assets.
- */
+// ✅ apply middleware to all routes (but we early-return above for /api and assets)
 export const config = {
   matcher: ["/:path*"],
 };
+
 
 
 
