@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 
@@ -14,39 +14,42 @@ function getSupabase() {
 export default function BillingClient() {
   const router = useRouter();
   const sp = useSearchParams();
-  const next = useMemo(() => sp.get("next") || "/builder", [sp]);
+  const next = sp.get("next") || "/builder";
 
   const [email, setEmail] = useState<string | null>(null);
-  const [token, setToken] = useState<string | null>(null);
+  const [token, setToken] = useState<string>("");
   const [loading, setLoading] = useState(true);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string>("");
 
   useEffect(() => {
     const run = async () => {
       try {
         const supabase = getSupabase();
-        const { data } = await supabase.auth.getSession();
-        const sess = data?.session;
+        const { data, error } = await supabase.auth.getSession();
 
-        setEmail(sess?.user?.email ?? null);
-        setToken(sess?.access_token ?? null);
+        if (error) {
+          setEmail(null);
+          setToken("");
+        } else {
+          setEmail(data?.session?.user?.email ?? null);
+          setToken(data?.session?.access_token ?? "");
+        }
       } catch {
         setEmail(null);
-        setToken(null);
+        setToken("");
       } finally {
         setLoading(false);
       }
     };
+
     run();
   }, []);
 
   async function goCheckout() {
-    setMsg(null);
-
+    setMsg("");
     try {
       if (!token) {
-        setMsg("Not signed in. Please log in first.");
-        router.push(`/login?next=${encodeURIComponent(`/billing?next=${next}`)}`);
+        router.push(`/login?next=${encodeURIComponent(`/billing?next=${encodeURIComponent(next)}`)}`);
         return;
       }
 
@@ -54,25 +57,14 @@ export default function BillingClient() {
         method: "POST",
         headers: {
           authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
         },
+        body: JSON.stringify({ next }),
       });
 
-      const text = await res.text();
-
-      let data: any = null;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        // keep as text
-      }
-
-      if (!res.ok) {
-        throw new Error(data?.error || text || "Checkout failed");
-      }
-
-      if (!data?.url) {
-        throw new Error("Missing checkout URL");
-      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Checkout failed");
+      if (!data?.url) throw new Error("Missing checkout URL");
 
       window.location.href = data.url;
     } catch (e: any) {
@@ -96,7 +88,7 @@ export default function BillingClient() {
     >
       <div
         style={{
-          width: "min(720px, 92vw)",
+          width: "min(760px, 92vw)",
           background: "rgba(255,255,255,0.12)",
           border: "1px solid rgba(255,255,255,0.18)",
           borderRadius: 16,
@@ -104,13 +96,21 @@ export default function BillingClient() {
           boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
         }}
       >
-        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 900 }}>Billing</h1>
+        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 900 }}>ForgeSite Billing</h1>
         <p style={{ marginTop: 8, opacity: 0.9 }}>
           Subscribe to access the Builder. After payment you’ll return to: <b>{next}</b>
         </p>
 
         <div style={{ marginTop: 12, opacity: 0.9, fontSize: 14 }}>
-          {loading ? "Checking session…" : email ? <>Signed in as <b>{email}</b></> : "Not signed in (login first)."}
+          {loading ? (
+            "Checking session…"
+          ) : email ? (
+            <>
+              Signed in as <b>{email}</b>
+            </>
+          ) : (
+            "Not signed in (login first)."
+          )}
         </div>
 
         {msg ? (
@@ -128,28 +128,27 @@ export default function BillingClient() {
         ) : null}
 
         <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
-          <button onClick={goCheckout} style={primaryBtn}>
-            Subscribe
+          <button onClick={goCheckout} disabled={loading} style={primaryBtn}>
+            {loading ? "Loading…" : "Subscribe"}
           </button>
 
-          <button
-            onClick={() => router.push("/terms")}
-            style={{ ...secondaryBtn, textDecoration: "underline" }}
-          >
+          <button onClick={() => router.push("/terms")} style={secondaryBtn}>
             Terms
           </button>
 
-          <button
-            onClick={() => router.push("/privacy")}
-            style={{ ...secondaryBtn, textDecoration: "underline" }}
-          >
+          <button onClick={() => router.push("/privacy")} style={secondaryBtn}>
             Privacy
           </button>
 
-          <button onClick={() => router.push("/login?next=/billing")} style={secondaryBtn}>
+          <button onClick={() => router.push(`/login?next=${encodeURIComponent(`/billing?next=${encodeURIComponent(next)}`)}`)} style={secondaryBtn}>
             Back to login
           </button>
         </div>
+
+        <p style={{ marginTop: 14, opacity: 0.65, fontSize: 13 }}>
+          If you already paid and still can’t access Builder, go to Billing again and re-click Subscribe (it will
+          pick up the checkout/session + redirect through success).
+        </p>
       </div>
     </main>
   );
@@ -171,17 +170,7 @@ const secondaryBtn: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.25)",
   background: "rgba(255,255,255,0.14)",
   color: "white",
-  fontWeight: 800,
+  fontWeight: 900,
   cursor: "pointer",
 };
-
-
-
-
-
-
-
-
-
-
 
