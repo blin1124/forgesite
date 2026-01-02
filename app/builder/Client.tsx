@@ -15,31 +15,58 @@ export default function BuilderClient() {
   const router = useRouter();
   const [email, setEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [entitled, setEntitled] = useState<boolean | null>(null);
 
-  // If your builder is gated by auth + billing, keep this check.
-  // (Your middleware likely handles it too, this is just UX.)
   useEffect(() => {
     const run = async () => {
       try {
         const supabase = getSupabase();
         const { data } = await supabase.auth.getSession();
+
         const userEmail = data?.session?.user?.email ?? null;
+        const token = data?.session?.access_token ?? null;
 
         setEmail(userEmail);
 
-        // If not signed in, bounce to login
-        if (!userEmail) {
+        if (!userEmail || !token) {
           router.push("/login?next=%2Fbuilder");
+          return;
+        }
+
+        // ✅ check entitlement
+        const res = await fetch("/api/entitlement", {
+          method: "GET",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        const json = await res.json().catch(() => ({}));
+        const ok = !!json?.entitled;
+
+        setEntitled(ok);
+
+        if (!ok) {
+          router.push("/billing?next=%2Fbuilder");
+          return;
         }
       } catch {
-        setEmail(null);
         router.push("/login?next=%2Fbuilder");
       } finally {
         setLoading(false);
       }
     };
+
     run();
   }, [router]);
+
+  if (loading) {
+    return (
+      <main style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
+        Loading…
+      </main>
+    );
+  }
+
+  if (entitled === false) return null;
 
   return (
     <main
@@ -54,7 +81,6 @@ export default function BuilderClient() {
       }}
     >
       <div style={{ width: "min(1100px, 94vw)", margin: "0 auto" }}>
-        {/* Top bar */}
         <div
           style={{
             display: "flex",
@@ -67,11 +93,14 @@ export default function BuilderClient() {
           <div>
             <h1 style={{ margin: 0, fontSize: 28, fontWeight: 900 }}>Builder</h1>
             <div style={{ marginTop: 6, opacity: 0.9, fontSize: 14 }}>
-              {loading ? "Loading…" : email ? <>Signed in as <b>{email}</b></> : null}
+              {email ? (
+                <>
+                  Signed in as <b>{email}</b>
+                </>
+              ) : null}
             </div>
           </div>
 
-          {/* ✅ Step C button goes RIGHT HERE */}
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <button onClick={() => router.push("/domain")} style={secondaryBtn}>
               Connect a Custom Domain →
@@ -83,7 +112,6 @@ export default function BuilderClient() {
           </div>
         </div>
 
-        {/* Main builder content area (placeholder) */}
         <div
           style={{
             background: "rgba(255,255,255,0.12)",
@@ -95,8 +123,7 @@ export default function BuilderClient() {
         >
           <h2 style={{ margin: 0, fontSize: 18, fontWeight: 900 }}>Your Builder UI</h2>
           <p style={{ marginTop: 8, opacity: 0.9 }}>
-            Put your existing builder components here (templates, site generator, editor, etc).
-            The new Domain page is linked from the button above.
+            Put your existing builder components here.
           </p>
 
           <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -133,3 +160,4 @@ const secondaryBtn: React.CSSProperties = {
   fontWeight: 900,
   cursor: "pointer",
 };
+
