@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 
@@ -14,10 +14,10 @@ function getSupabase() {
 export default function BillingClient() {
   const router = useRouter();
   const sp = useSearchParams();
-  const next = sp.get("next") || "/builder";
+  const next = useMemo(() => sp.get("next") || "/builder", [sp]);
 
   const [email, setEmail] = useState<string | null>(null);
-  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -25,14 +25,14 @@ export default function BillingClient() {
     const run = async () => {
       try {
         const supabase = getSupabase();
-        const { data, error } = await supabase.auth.getSession();
-        if (error) throw error;
+        const { data } = await supabase.auth.getSession();
+        const sess = data?.session;
 
-        setEmail(data?.session?.user?.email ?? null);
-        setAccessToken(data?.session?.access_token ?? null);
+        setEmail(sess?.user?.email ?? null);
+        setToken(sess?.access_token ?? null);
       } catch {
         setEmail(null);
-        setAccessToken(null);
+        setToken(null);
       } finally {
         setLoading(false);
       }
@@ -44,16 +44,16 @@ export default function BillingClient() {
     setMsg(null);
 
     try {
-      if (!accessToken) {
-        setMsg("Not signed in");
-        router.push("/login?next=%2Fbilling");
+      if (!token) {
+        setMsg("Not signed in. Please log in first.");
+        router.push(`/login?next=${encodeURIComponent(`/billing?next=${next}`)}`);
         return;
       }
 
       const res = await fetch("/api/checkout", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          authorization: `Bearer ${token}`,
         },
       });
 
@@ -63,12 +63,11 @@ export default function BillingClient() {
       try {
         data = JSON.parse(text);
       } catch {
-        // if it isn't JSON, show raw text
-        throw new Error(text || "Checkout failed");
+        // keep as text
       }
 
       if (!res.ok) {
-        throw new Error(data?.error || "Checkout failed");
+        throw new Error(data?.error || text || "Checkout failed");
       }
 
       if (!data?.url) {
@@ -106,13 +105,12 @@ export default function BillingClient() {
         }}
       >
         <h1 style={{ margin: 0, fontSize: 28, fontWeight: 900 }}>Billing</h1>
-
         <p style={{ marginTop: 8, opacity: 0.9 }}>
           Subscribe to access the Builder. After payment you’ll return to: <b>{next}</b>
         </p>
 
         <div style={{ marginTop: 12, opacity: 0.9, fontSize: 14 }}>
-          {loading ? "Checking session…" : email ? <>Signed in as <b>{email}</b></> : "Not signed in"}
+          {loading ? "Checking session…" : email ? <>Signed in as <b>{email}</b></> : "Not signed in (login first)."}
         </div>
 
         {msg ? (
@@ -134,11 +132,17 @@ export default function BillingClient() {
             Subscribe
           </button>
 
-          <button onClick={() => router.push("/terms")} style={{ ...secondaryBtn, textDecoration: "underline" }}>
+          <button
+            onClick={() => router.push("/terms")}
+            style={{ ...secondaryBtn, textDecoration: "underline" }}
+          >
             Terms
           </button>
 
-          <button onClick={() => router.push("/privacy")} style={{ ...secondaryBtn, textDecoration: "underline" }}>
+          <button
+            onClick={() => router.push("/privacy")}
+            style={{ ...secondaryBtn, textDecoration: "underline" }}
+          >
             Privacy
           </button>
 
@@ -170,6 +174,8 @@ const secondaryBtn: React.CSSProperties = {
   fontWeight: 800,
   cursor: "pointer",
 };
+
+
 
 
 
