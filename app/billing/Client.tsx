@@ -42,34 +42,31 @@ export default function BillingClient() {
       const supabase = getSupabase();
       const { data, error } = await supabase.auth.getSession();
 
-      if (error || !data?.session?.access_token) {
-        setMsg("You must be logged in.");
-        router.push(`/login?next=${encodeURIComponent("/billing?next=" + encodeURIComponent(next))}`);
+      const token = data?.session?.access_token;
+      if (error || !token) {
+        setMsg("Auth session missing (please log in again).");
         return;
       }
-
-      const token = data.session.access_token;
 
       const res = await fetch("/api/checkout", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ next }),
       });
 
-      const json = await res.json().catch(() => null);
+      const text = await res.text();
 
-      if (!res.ok) {
-        setMsg(json?.error || json || "Checkout failed");
-        return;
+      let json: any = null;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        // If server returned HTML or plain text, show it
+        throw new Error(text || "Checkout failed");
       }
 
-      if (!json?.url) {
-        setMsg("Checkout failed (missing URL).");
-        return;
-      }
+      if (!res.ok) throw new Error(json?.error || "Checkout failed");
+      if (!json?.url) throw new Error("Missing checkout URL");
 
       window.location.href = json.url;
     } catch (e: any) {
@@ -129,17 +126,11 @@ export default function BillingClient() {
             Subscribe
           </button>
 
-          <button
-            onClick={() => router.push("/terms")}
-            style={{ ...secondaryBtn, textDecoration: "underline" }}
-          >
+          <button onClick={() => router.push("/terms")} style={{ ...secondaryBtn, textDecoration: "underline" }}>
             Terms
           </button>
 
-          <button
-            onClick={() => router.push("/privacy")}
-            style={{ ...secondaryBtn, textDecoration: "underline" }}
-          >
+          <button onClick={() => router.push("/privacy")} style={{ ...secondaryBtn, textDecoration: "underline" }}>
             Privacy
           </button>
 
@@ -171,6 +162,8 @@ const secondaryBtn: React.CSSProperties = {
   fontWeight: 800,
   cursor: "pointer",
 };
+
+
 
 
 
