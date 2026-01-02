@@ -14,51 +14,63 @@ function getSupabase() {
 export default function SuccessClient() {
   const router = useRouter();
   const sp = useSearchParams();
-  const sessionId = useMemo(() => sp.get("session_id") || "", [sp]);
 
-  const [msg, setMsg] = useState("Finalizing your subscription…");
-  const [err, setErr] = useState<string | null>(null);
+  const sessionId = useMemo(() => sp.get("session_id") || "", [sp]);
+  const next = useMemo(() => sp.get("next") || "/builder", [sp]);
+
+  const [msg, setMsg] = useState<string>("Finalizing your subscription…");
 
   useEffect(() => {
     const run = async () => {
       try {
         if (!sessionId) {
-          setErr("Missing Stripe session_id");
-          setMsg("Something went wrong.");
+          setMsg("Missing session_id from Stripe. Returning to billing…");
+          setTimeout(() => router.replace("/billing?next=%2Fbuilder"), 1200);
           return;
         }
 
         const supabase = getSupabase();
-        const { data } = await supabase.auth.getSession();
-        const token = data?.session?.access_token;
+        const { data: sess } = await supabase.auth.getSession();
+        const token = sess?.session?.access_token;
 
         if (!token) {
-          router.push(`/login?next=${encodeURIComponent(`/pro/success?session_id=${sessionId}`)}`);
+          setMsg("You are not signed in. Please log in, then we’ll finish activation.");
+          setTimeout(() => router.replace(`/login?next=${encodeURIComponent(`/pro/success?session_id=${sessionId}&next=${next}`)}`), 1200);
           return;
         }
 
-        // ✅ Sync Stripe → entitlements
         const res = await fetch("/api/stripe/sync", {
           method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${token}`,
+          },
           body: JSON.stringify({ session_id: sessionId }),
         });
 
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(json?.error || "Sync failed");
+        const text = await res.text();
+        let json: any = null;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          // keep as text
+        }
+
+        if (!res.ok) {
+          const errMsg = json?.error || text || "Activation failed";
+          setMsg(errMsg);
+          return;
+        }
 
         setMsg("Subscription activated. Redirecting to Builder…");
-
-        // small delay so user sees message
-        setTimeout(() => router.push("/builder"), 600);
+        setTimeout(() => router.replace(next), 800);
       } catch (e: any) {
-        setErr(e?.message || "Failed to activate subscription");
-        setMsg("Activation failed.");
+        setMsg(e?.message || "Activation failed");
       }
     };
 
     run();
-  }, [router, sessionId]);
+  }, [router, sessionId, next]);
 
   return (
     <main
@@ -76,7 +88,7 @@ export default function SuccessClient() {
     >
       <div
         style={{
-          width: "min(640px, 92vw)",
+          width: "min(720px, 92vw)",
           background: "rgba(255,255,255,0.12)",
           border: "1px solid rgba(255,255,255,0.18)",
           borderRadius: 16,
@@ -84,26 +96,12 @@ export default function SuccessClient() {
           boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
         }}
       >
-        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 900 }}>Success</h1>
-        <p style={{ marginTop: 10, opacity: 0.9 }}>{msg}</p>
+        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 900 }}>Payment Success</h1>
+        <p style={{ marginTop: 8, opacity: 0.9 }}>{msg}</p>
 
-        {err ? (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              borderRadius: 12,
-              background: "rgba(185, 28, 28, .25)",
-              border: "1px solid rgba(185, 28, 28, .5)",
-            }}
-          >
-            {err}
-          </div>
-        ) : null}
-
-        <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
           <button
-            onClick={() => router.push("/builder")}
+            onClick={() => router.replace(next)}
             style={{
               padding: "12px 14px",
               borderRadius: 12,
@@ -118,7 +116,7 @@ export default function SuccessClient() {
           </button>
 
           <button
-            onClick={() => router.push("/billing")}
+            onClick={() => router.replace("/billing?next=%2Fbuilder")}
             style={{
               padding: "12px 14px",
               borderRadius: 12,
@@ -136,3 +134,5 @@ export default function SuccessClient() {
     </main>
   );
 }
+
+
