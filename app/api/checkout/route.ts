@@ -1,3 +1,4 @@
+// app/api/checkout/route.ts
 import { NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
 import { supabaseAdmin } from "@/lib/supabase/admin";
@@ -23,7 +24,6 @@ export async function POST(req: Request) {
     // 1) Find/create Stripe customer
     let customerId: string | null = null;
 
-    // Try profiles table first (if you use it)
     const { data: prof } = await supabaseAdmin
       .from("profiles")
       .select("stripe_customer_id")
@@ -39,12 +39,19 @@ export async function POST(req: Request) {
       });
       customerId = customer.id;
 
-      // Save it back (ignore failures if table doesn't exist)
-      await supabaseAdmin
-        .from("profiles")
-        .upsert({ id: user.id, stripe_customer_id: customerId, updated_at: new Date().toISOString() })
-        .throwOnError()
-        .catch(() => {});
+      // Save back to profiles if that table exists (ignore if it doesn't)
+      try {
+        await supabaseAdmin
+          .from("profiles")
+          .upsert({
+            id: user.id,
+            stripe_customer_id: customerId,
+            updated_at: new Date().toISOString(),
+          })
+          .throwOnError();
+      } catch {
+        // ignore (table might not exist or RLS blocks it)
+      }
     }
 
     // 2) Create checkout session (subscription)
@@ -59,10 +66,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ url: session.url });
   } catch (err: any) {
-    return NextResponse.json(
-      { error: err?.message || "Checkout failed" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: err?.message || "Checkout failed" }, { status: 500 });
   }
 }
 
