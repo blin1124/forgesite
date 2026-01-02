@@ -17,6 +17,7 @@ export default function BillingClient() {
   const next = sp.get("next") || "/builder";
 
   const [email, setEmail] = useState<string | null>(null);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -24,10 +25,14 @@ export default function BillingClient() {
     const run = async () => {
       try {
         const supabase = getSupabase();
-        const { data } = await supabase.auth.getSession();
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
+
         setEmail(data?.session?.user?.email ?? null);
+        setAccessToken(data?.session?.access_token ?? null);
       } catch {
         setEmail(null);
+        setAccessToken(null);
       } finally {
         setLoading(false);
       }
@@ -39,36 +44,33 @@ export default function BillingClient() {
     setMsg(null);
 
     try {
-      const supabase = getSupabase();
-      const { data, error } = await supabase.auth.getSession();
-
-      const token = data?.session?.access_token;
-      if (error || !token) {
-        setMsg("Auth session missing (please log in again).");
+      if (!accessToken) {
+        setMsg("Not signed in. Please log in again.");
+        router.push(`/login?next=${encodeURIComponent("/billing?next=" + encodeURIComponent(next))}`);
         return;
       }
 
       const res = await fetch("/api/checkout", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${accessToken}`,
         },
       });
 
       const text = await res.text();
 
-      let json: any = null;
+      let data: any = null;
       try {
-        json = JSON.parse(text);
+        data = JSON.parse(text);
       } catch {
-        // If server returned HTML or plain text, show it
+        // if server sent plain text/html, show it
         throw new Error(text || "Checkout failed");
       }
 
-      if (!res.ok) throw new Error(json?.error || "Checkout failed");
-      if (!json?.url) throw new Error("Missing checkout URL");
+      if (!res.ok) throw new Error(data?.error || "Checkout failed");
+      if (!data?.url) throw new Error("Missing checkout URL");
 
-      window.location.href = json.url;
+      window.location.href = data.url;
     } catch (e: any) {
       setMsg(e?.message || "Checkout failed");
     }
@@ -162,6 +164,7 @@ const secondaryBtn: React.CSSProperties = {
   fontWeight: 800,
   cursor: "pointer",
 };
+
 
 
 
