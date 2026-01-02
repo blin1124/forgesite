@@ -1,78 +1,63 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import Stripe from "stripe";
 import { stripe } from "@/lib/stripe";
-import { createServerClient } from "@supabase/ssr";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
-export async function POST() {
+export async function POST(req: Request) {
   try {
-    /**
-     * 1️⃣ Create Supabase server client WITH cookies
-     */
-    const cookieStore = cookies();
+    // ✅ Expect token from client
+    const authHeader = req.headers.get("authorization") || "";
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice("Bearer ".length).trim()
+      : "";
 
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          get(name: string) {
-            return cookieStore.get(name)?.value;
-          },
-        },
-      }
-    );
-
-    /**
-     * 2️⃣ Get logged-in user
-     */
-    const { data: authData } = await supabase.auth.getUser();
-    const user = authData?.user;
-
-    if (!user) {
-      return NextResponse.json(
-        { error: "Auth session missing" },
-        { status: 401 }
-      );
+    if (!token) {
+      return NextResponse.json({ error: "Auth session missing" }, { status: 401 });
     }
 
-    /**
-     * 3️⃣ Create Stripe Checkout Session
-     */
+    // ✅ Validate user using service role client
+    const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
+    const user = userData?.user;
+
+    if (userErr || !user) {
+      return NextResponse.json({ error: "Invalid session" }, { status: 401 });
+    }
+
+    const priceId = process.env.STRIPE_PRICE_ID;
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+
+    if (!priceId) {
+      return NextResponse.json({ error: "Missing STRIPE_PRICE_ID" }, { status: 500 });
+    }
+    if (!appUrl) {
+      return NextResponse.json({ error: "Missing NEXT_PUBLIC_APP_URL" }, { status: 500 });
+    }
+
+    // ✅ Create Checkout session
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       payment_method_types: ["card"],
-      line_items: [
-        {
-          price: process.env.STRIPE_PRICE_ID!,
-          quantity: 1,
-        },
-      ],
+      line_items: [{ price: priceId, quantity: 1 }],
+
       customer_email: user.email ?? undefined,
 
-      /**
-       * 🔑 THIS IS CRITICAL
-       * Used later by webhook to unlock access
-       */
+      // 🔥 critical for webhook entitlement unlock
       metadata: {
         supabase_user_id: user.id,
       },
 
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL}/builder`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/billing`,
+      success_url: `${appUrl}/pro/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${appUrl}/billing`,
     });
 
     return NextResponse.json({ url: session.url });
   } catch (err: any) {
     console.error("Checkout error:", err);
-    return NextResponse.json(
-      { error: err?.message || "Checkout failed" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: err?.message || "Checkout failed" }, { status: 500 });
   }
 }
+
 
 
 
