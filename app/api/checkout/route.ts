@@ -1,6 +1,4 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createServerClient } from "@supabase/ssr";
 import { stripe } from "@/lib/stripe";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
@@ -8,95 +6,64 @@ export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
     const priceId = process.env.STRIPE_PRICE_ID!;
-    const appUrl =
-      process.env.NEXT_PUBLIC_APP_URL || req.headers.get("origin") || "";
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || req.headers.get("origin") || "";
 
-    if (!supabaseUrl || !supabaseAnon) {
-      return NextResponse.json(
-        { error: "Missing Supabase env (NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY)" },
-        { status: 500 }
-      );
-    }
     if (!priceId) {
-      return NextResponse.json(
-        { error: "Missing STRIPE_PRICE_ID" },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Missing STRIPE_PRICE_ID" }, { status: 500 });
     }
     if (!appUrl) {
-      return NextResponse.json(
-        { error: "Missing NEXT_PUBLIC_APP_URL (and no Origin header)" },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Missing NEXT_PUBLIC_APP_URL (and no Origin header)" }, { status: 500 });
     }
 
-    // ✅ Read the logged-in user from cookies (server-side)
-    const cookieStore = cookies();
-    const supabase = createServerClient(supabaseUrl, supabaseAnon, {
-      cookies: {
-        get(name: string) {
-          return cookieStore.get(name)?.value;
-        },
-        set() {
-          // no-op for this route
-        },
-        remove() {
-          // no-op for this route
-        },
-      },
-    });
+    // ✅ 1) Validate user via Bearer token (fixes “Auth session missing”)
+    const authHeader = req.headers.get("authorization") || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
 
-    const { data: userData, error: userErr } = await supabase.auth.getUser();
+    if (!token) {
+      return NextResponse.json({ error: "Auth session missing" }, { status: 401 });
+    }
+
+    const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
     const user = userData?.user;
 
     if (userErr || !user) {
-      return NextResponse.json(
-        { error: "Auth session missing" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Auth session missing" }, { status: 401 });
     }
 
     const email = (user.email || "").toLowerCase();
 
-    // ✅ Find or create Stripe customer
-    // 1) Try entitlements table first
+    // ✅ 2) Find or create Stripe customer
     let customerId: string | null = null;
 
+    // Try entitlements first
     const { data: entRow } = await supabaseAdmin
       .from("entitlements")
       .select("stripe_customer_id")
       .eq("user_id", user.id)
       .maybeSingle();
 
-    if (entRow?.stripe_customer_id) {
-      customerId = entRow.stripe_customer_id;
-    }
+    if (entRow?.stripe_customer_id) customerId = entRow.stripe_customer_id;
 
-    // 2) Try profiles table as fallback (if you keep it)
+    // Try profiles fallback (if you have it)
     if (!customerId) {
       const { data: profRow } = await supabaseAdmin
         .from("profiles")
         .select("stripe_customer_id")
         .eq("id", user.id)
         .maybeSingle();
-
       if (profRow?.stripe_customer_id) customerId = profRow.stripe_customer_id;
     }
 
-    // 3) Create customer if still missing
+    // Create customer if missing
     if (!customerId) {
       const customer = await stripe.customers.create({
         email: email || undefined,
-        metadata: {
-          supabase_user_id: user.id,
-        },
+        metadata: { supabase_user_id: user.id },
       });
       customerId = customer.id;
 
-      // Best effort: write it back (NO .catch chain — Vercel TS hates that here)
+      // Best-effort saves (no .catch chaining)
       try {
         await supabaseAdmin
           .from("profiles")
@@ -104,7 +71,7 @@ export async function POST(req: Request) {
             id: user.id,
             stripe_customer_id: customerId,
             updated_at: new Date().toISOString(),
-          })
+          } as any)
           .throwOnError();
       } catch {}
 
@@ -124,7 +91,7 @@ export async function POST(req: Request) {
       } catch {}
     }
 
-    // ✅ Create Stripe Checkout session (subscription)
+    // ✅ 3) Create Stripe Checkout session (subscription)
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customerId,
@@ -132,8 +99,6 @@ export async function POST(req: Request) {
       success_url: `${appUrl}/pro/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}/billing?canceled=1`,
       allow_promotion_codes: true,
-
-      // ✅ THIS is the key “unlock builder after pay” hook:
       metadata: {
         supabase_user_id: user.id,
         supabase_email: email,
@@ -142,10 +107,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ url: session.url });
   } catch (err: any) {
-    return NextResponse.json(
-      { error: err?.message || "Checkout failed" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: err?.message || "Checkout failed" }, { status: 500 });
   }
 }
 
