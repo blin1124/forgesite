@@ -1,17 +1,23 @@
-// app/api/checkout/route.ts
 import { NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   try {
-    const supabase = createSupabaseServerClient();
-    const { data: userData, error: userErr } = await supabase.auth.getUser();
+    // ✅ Read Bearer token from client
+    const auth = req.headers.get("authorization") || "";
+    const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length).trim() : "";
 
+    if (!token) {
+      return NextResponse.json({ error: "Auth session missing" }, { status: 401 });
+    }
+
+    // ✅ Validate token + fetch user using service role
+    const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
     const user = userData?.user;
+
     if (userErr || !user) {
       return NextResponse.json({ error: "Auth session missing" }, { status: 401 });
     }
@@ -21,7 +27,7 @@ export async function POST(req: Request) {
     if (!appUrl) return NextResponse.json({ error: "Missing NEXT_PUBLIC_APP_URL" }, { status: 500 });
     if (!priceId) return NextResponse.json({ error: "Missing STRIPE_PRICE_ID" }, { status: 500 });
 
-    // 1) Find/create Stripe customer
+    // 1) Find/create Stripe customer id
     let customerId: string | null = null;
 
     const { data: prof } = await supabaseAdmin
@@ -39,7 +45,7 @@ export async function POST(req: Request) {
       });
       customerId = customer.id;
 
-      // Save back to profiles if that table exists (ignore if it doesn't)
+      // Save (ignore if profiles table doesn't match)
       try {
         await supabaseAdmin
           .from("profiles")
@@ -50,11 +56,11 @@ export async function POST(req: Request) {
           })
           .throwOnError();
       } catch {
-        // ignore (table might not exist or RLS blocks it)
+        // ignore
       }
     }
 
-    // 2) Create checkout session (subscription)
+    // 2) Create Stripe Checkout session (subscription)
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customerId,
