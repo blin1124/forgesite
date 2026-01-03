@@ -5,19 +5,23 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
+/**
+ * Stripe webhooks MUST read the raw body for signature verification.
+ */
 export async function POST(req: Request) {
   const sig = req.headers.get("stripe-signature");
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
   if (!sig || !webhookSecret) {
-    return NextResponse.json({ error: "Missing Stripe signature or webhook secret" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Missing Stripe signature or STRIPE_WEBHOOK_SECRET" },
+      { status: 400 }
+    );
   }
 
-  // Stripe requires raw body for signature verification
   const body = await req.text();
 
   let event: Stripe.Event;
-
   try {
     event = stripe.webhooks.constructEvent(body, sig, webhookSecret);
   } catch (err: any) {
@@ -25,35 +29,34 @@ export async function POST(req: Request) {
   }
 
   try {
-    // ✅ handle subscription activation/renewal
+    // ✅ 1) checkout completed -> create/activate entitlement
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
 
-      const customerId = String(session.customer || "");
-      const subscriptionId = String(session.subscription || "");
-      const email = session.customer_details?.email?.toLowerCase() || null;
-
-      // If you saved supabase user id in metadata, use it.
-      // (Recommended, we set it below in checkout route.)
+      const customerId = session.customer ? String(session.customer) : null;
+      const subscriptionId = session.subscription ? String(session.subscription) : null;
       const userId = (session.metadata?.supabase_user_id || "").trim() || null;
+      const email = session.customer_details?.email?.toLowerCase() || session.customer_email?.toLowerCase() || null;
 
-      // Pull subscription to get period end + status
-      let status: string | null = null;
+      // Pull subscription info for status + period end
+      let status: string | null = "active";
       let currentPeriodEnd: string | null = null;
 
       if (subscriptionId) {
         const sub = await stripe.subscriptions.retrieve(subscriptionId);
-        status = sub.status ?? null;
-        const cpe = (sub as any).current_period_end; // Stripe types can lag
+        status = (sub.status as any) ?? "active";
+        const cpe = (sub as any).current_period_end;
         currentPeriodEnd = cpe ? new Date(cpe * 1000).toISOString() : null;
       }
 
-      // Upsert entitlement
+      // Write entitlement row
+      // NOTE: your table columns (from your screenshot):
+      // user_id uuid, email text, stripe_customer_id text, stripe_subscription_id text, status text, current_period_end timestamptz, created_at, updated_at
       await supabaseAdmin
         .from("entitlements")
         .upsert(
           {
-            user_id: userId, // can be null if metadata missing (we’ll handle fallback below)
+            user_id: userId,
             email,
             stripe_customer_id: customerId,
             stripe_subscription_id: subscriptionId,
@@ -61,27 +64,18 @@ export async function POST(req: Request) {
             current_period_end: currentPeriodEnd,
             updated_at: new Date().toISOString(),
           } as any,
-          { onConflict: "stripe_customer_id" }
+          // use subscription id if present, otherwise customer id
+          { onConflict: subscriptionId ? "stripe_subscription_id" : "stripe_customer_id" }
         );
-
-      // If user_id was missing, but email exists, try to attach it:
-      if (!userId && email) {
-        // Find a supabase user id by profile/email if you store it.
-        // If you don't have profiles email, skip this.
-        // (Safer approach: always set metadata.supabase_user_id in checkout route)
-      }
     }
 
-    // ✅ handle subscription updates/cancellations
-    if (
-      event.type === "customer.subscription.updated" ||
-      event.type === "customer.subscription.deleted"
-    ) {
+    // ✅ 2) subscription updated/deleted -> keep entitlement in sync
+    if (event.type === "customer.subscription.updated" || event.type === "customer.subscription.deleted") {
       const sub = event.data.object as Stripe.Subscription;
 
-      const customerId = String(sub.customer || "");
-      const subscriptionId = String(sub.id || "");
-      const status = sub.status ?? "canceled";
+      const customerId = sub.customer ? String(sub.customer) : null;
+      const subscriptionId = sub.id ? String(sub.id) : null;
+      const status = (sub.status as any) ?? "canceled";
       const cpe = (sub as any).current_period_end;
       const currentPeriodEnd = cpe ? new Date(cpe * 1000).toISOString() : null;
 
@@ -95,15 +89,17 @@ export async function POST(req: Request) {
             current_period_end: currentPeriodEnd,
             updated_at: new Date().toISOString(),
           } as any,
-          { onConflict: "stripe_customer_id" }
+          { onConflict: "stripe_subscription_id" }
         );
     }
 
     return NextResponse.json({ received: true });
   } catch (err: any) {
+    console.error("Webhook handler failed:", err);
     return NextResponse.json({ error: err?.message || "Webhook handler failed" }, { status: 500 });
   }
 }
+
 
 
 
