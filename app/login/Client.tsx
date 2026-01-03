@@ -15,6 +15,7 @@ export default function LoginClient() {
   const router = useRouter();
   const sp = useSearchParams();
 
+  // ✅ DEFAULT to billing (so customers always pay first)
   const next = useMemo(() => sp.get("next") || "/billing", [sp]);
 
   const [email, setEmail] = useState("");
@@ -27,16 +28,13 @@ export default function LoginClient() {
     setBusy(true);
     try {
       const supabase = getSupabase();
-
       const { error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       });
-
       if (error) throw new Error(error.message);
 
-      // IMPORTANT: even after login, we still send them to billing first
-      router.push(next || "/billing");
+      router.push(next);
     } catch (e: any) {
       setError(e?.message || "Login failed");
     } finally {
@@ -53,7 +51,7 @@ export default function LoginClient() {
         padding: 24,
         color: "white",
         background:
-          "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(17,24,39) 0%, rgb(0,0,0) 55%, rgb(31,41,55) 100%)",
+          "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(124,58,237) 0%, rgb(109,40,217) 35%, rgb(91,33,182) 100%)",
         fontFamily:
           'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
       }}
@@ -61,15 +59,17 @@ export default function LoginClient() {
       <div
         style={{
           width: "min(520px, 92vw)",
-          background: "rgba(255,255,255,0.10)",
+          background: "rgba(255,255,255,0.12)",
           border: "1px solid rgba(255,255,255,0.18)",
           borderRadius: 16,
           padding: 18,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+          boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
         }}
       >
-        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 900 }}>Log in to ForgeSite</h1>
-        <p style={{ marginTop: 8, opacity: 0.85 }}>Continue to: {next}</p>
+        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 900 }}>Log in</h1>
+        <p style={{ marginTop: 8, opacity: 0.85 }}>
+          After login, you’ll go to: <b>{next}</b>
+        </p>
 
         {error ? (
           <div
@@ -86,20 +86,13 @@ export default function LoginClient() {
         ) : null}
 
         <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
-          <input
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="Email"
-            style={inputStyle}
-            autoComplete="email"
-          />
+          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" style={inputStyle} />
           <input
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Password"
             type="password"
             style={inputStyle}
-            autoComplete="current-password"
           />
 
           <button
@@ -108,12 +101,9 @@ export default function LoginClient() {
             style={{
               ...buttonStyle,
               opacity: busy || !email.trim() || password.length < 6 ? 0.6 : 1,
-              background: "rgba(16,185,129,0.80)",
-              border: "1px solid rgba(16,185,129,0.65)",
-              color: "black",
             }}
           >
-            {busy ? "Logging in…" : "Log in"}
+            {busy ? "Signing in…" : "Log in"}
           </button>
 
           <a
@@ -127,7 +117,7 @@ export default function LoginClient() {
               fontSize: 13,
             }}
           >
-            Need an account? Create one
+            Need an account? Sign up
           </a>
         </div>
       </div>
@@ -141,7 +131,7 @@ const inputStyle: React.CSSProperties = {
   borderRadius: 12,
   border: "1px solid rgba(255,255,255,0.18)",
   outline: "none",
-  background: "rgba(0,0,0,0.25)",
+  background: "rgba(0,0,0,0.18)",
   color: "white",
 };
 
@@ -154,3 +144,4 @@ const buttonStyle: React.CSSProperties = {
   fontWeight: 900,
   cursor: "pointer",
 };
+
