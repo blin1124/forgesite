@@ -2,20 +2,12 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
-function isPaidPath(pathname: string) {
-  // Add any routes you want to require subscription for
+function isAsset(pathname: string) {
   return (
-    pathname.startsWith("/builder") ||
-    pathname.startsWith("/domain") ||
-    pathname.startsWith("/sites") ||
-    pathname.startsWith("/templates")
+    pathname.startsWith("/_next") ||
+    pathname.startsWith("/favicon.ico") ||
+    pathname.match(/\.(png|jpg|jpeg|gif|svg|webp|ico|css|js|map)$/i)
   );
-}
-
-function isActive(status: string | null, currentPeriodEnd: string | null) {
-  if (status !== "active" && status !== "trialing") return false;
-  if (!currentPeriodEnd) return true;
-  return new Date(currentPeriodEnd).getTime() > Date.now();
 }
 
 export async function middleware(req: NextRequest) {
@@ -24,33 +16,29 @@ export async function middleware(req: NextRequest) {
   // 1) NEVER protect API routes
   if (pathname.startsWith("/api")) return NextResponse.next();
 
-  // 2) Allow Next internals + static assets
-  if (
-    pathname.startsWith("/_next") ||
-    pathname.startsWith("/favicon.ico") ||
-    pathname.match(/\.(png|jpg|jpeg|gif|svg|webp|ico|css|js|map)$/)
-  ) {
-    return NextResponse.next();
-  }
+  // 2) Allow Next.js internals + static assets
+  if (isAsset(pathname)) return NextResponse.next();
 
-  // 3) Public routes
+  // 3) Public pages
   const publicPaths = [
     "/",
     "/login",
     "/signup",
     "/billing",
-    "/terms",
-    "/privacy",
     "/callback",
     "/auth/callback",
-    "/pro/success", // IMPORTANT: must be reachable after Stripe returns
+    "/terms",
+    "/privacy",
+    "/pro/success",
   ];
   if (publicPaths.includes(pathname)) return NextResponse.next();
 
+  // 4) Build Supabase server client using request cookies
   const res = NextResponse.next();
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  if (!supabaseUrl || !supabaseAnon) return res;
 
   const supabase = createServerClient(supabaseUrl, supabaseAnon, {
     cookies: {
@@ -66,9 +54,9 @@ export async function middleware(req: NextRequest) {
     },
   });
 
-  // 4) Auth gate
-  const { data } = await supabase.auth.getUser();
-  const user = data?.user;
+  // 5) Auth gate
+  const { data: userData } = await supabase.auth.getUser();
+  const user = userData?.user;
 
   if (!user) {
     const url = req.nextUrl.clone();
@@ -77,19 +65,36 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // 5) Entitlement gate (only for paid paths)
-  if (isPaidPath(pathname)) {
-    const ent = await supabase
+  // 6) Entitlement gate (only for Builder routes — edit these rules as you want)
+  const needsEntitlement =
+    pathname === "/builder" ||
+    pathname.startsWith("/builder/") ||
+    pathname === "/sites" ||
+    pathname.startsWith("/sites/") ||
+    pathname === "/templates" ||
+    pathname.startsWith("/templates/") ||
+    pathname === "/domain" ||
+    pathname.startsWith("/domain/");
+
+  if (needsEntitlement) {
+    // IMPORTANT:
+    // This assumes your `entitlements` table is readable for the logged-in user.
+    // If you turned ON RLS for entitlements, add the policy: user_id = auth.uid().
+    const { data: ent, error } = await supabase
       .from("entitlements")
-      .select("status,current_period_end,updated_at")
+      .select("status,current_period_end")
       .eq("user_id", user.id)
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
-    const ok = !ent.error && ent.data && isActive(ent.data.status ?? null, ent.data.current_period_end ?? null);
+    const status = (ent?.status || "").toLowerCase();
 
-    if (!ok) {
+    // Treat these as "paid/active"
+    const isActive =
+      status === "active" || status === "trialing" || status === "paid";
+
+    if (error || !ent || !isActive) {
       const url = req.nextUrl.clone();
       url.pathname = "/billing";
       url.search = `?next=${encodeURIComponent(pathname + search)}`;
