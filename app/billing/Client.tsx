@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 
@@ -14,7 +14,8 @@ function getSupabase() {
 export default function BillingClient() {
   const router = useRouter();
   const sp = useSearchParams();
-  const next = sp.get("next") || "/builder";
+
+  const next = useMemo(() => sp.get("next") || "/builder", [sp]);
 
   const [email, setEmail] = useState<string | null>(null);
   const [token, setToken] = useState<string>("");
@@ -62,9 +63,18 @@ export default function BillingClient() {
         body: JSON.stringify({ next }),
       });
 
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || "Checkout failed");
-      if (!data?.url) throw new Error("Missing checkout URL");
+      // IMPORTANT: if middleware ever redirects, this will be HTML, so read text first.
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(text);
+      } catch {
+        // show the first bit of HTML/text so you can see what happened
+        throw new Error(`Checkout response not JSON (${res.status}). ${text.slice(0, 180)}`);
+      }
+
+      if (!res.ok) throw new Error(data?.error || `Checkout failed (${res.status})`);
+      if (!data?.url) throw new Error("Checkout succeeded but returned no url");
 
       window.location.href = data.url;
     } catch (e: any) {
@@ -121,6 +131,7 @@ export default function BillingClient() {
               borderRadius: 12,
               background: "rgba(185, 28, 28, .25)",
               border: "1px solid rgba(185, 28, 28, .5)",
+              whiteSpace: "pre-wrap",
             }}
           >
             {msg}
@@ -140,15 +151,15 @@ export default function BillingClient() {
             Privacy
           </button>
 
-          <button onClick={() => router.push(`/login?next=${encodeURIComponent(`/billing?next=${encodeURIComponent(next)}`)}`)} style={secondaryBtn}>
+          <button
+            onClick={() =>
+              router.push(`/login?next=${encodeURIComponent(`/billing?next=${encodeURIComponent(next)}`)}`)
+            }
+            style={secondaryBtn}
+          >
             Back to login
           </button>
         </div>
-
-        <p style={{ marginTop: 14, opacity: 0.65, fontSize: 13 }}>
-          If you already paid and still can’t access Builder, go to Billing again and re-click Subscribe (it will
-          pick up the checkout/session + redirect through success).
-        </p>
       </div>
     </main>
   );
@@ -173,4 +184,6 @@ const secondaryBtn: React.CSSProperties = {
   fontWeight: 900,
   cursor: "pointer",
 };
+
+
 
