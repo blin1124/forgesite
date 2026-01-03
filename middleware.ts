@@ -1,24 +1,30 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
-function isGatedPath(pathname: string) {
+function isPaidPath(pathname: string) {
+  // Add any routes you want to require subscription for
   return (
     pathname.startsWith("/builder") ||
-    pathname.startsWith("/sites") ||
     pathname.startsWith("/domain") ||
-    pathname.startsWith("/templates") ||
-    pathname.startsWith("/account") ||
-    pathname.startsWith("/settings")
+    pathname.startsWith("/sites") ||
+    pathname.startsWith("/templates")
   );
+}
+
+function isActive(status: string | null, currentPeriodEnd: string | null) {
+  if (status !== "active" && status !== "trialing") return false;
+  if (!currentPeriodEnd) return true;
+  return new Date(currentPeriodEnd).getTime() > Date.now();
 }
 
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
 
-  // ✅ Never gate API routes
+  // 1) NEVER protect API routes
   if (pathname.startsWith("/api")) return NextResponse.next();
 
-  // ✅ Next.js internals / assets
+  // 2) Allow Next internals + static assets
   if (
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon.ico") ||
@@ -27,23 +33,19 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // ✅ Always public pages
-  if (
-    pathname === "/" ||
-    pathname === "/login" ||
-    pathname === "/signup" ||
-    pathname === "/billing" ||
-    pathname === "/terms" ||
-    pathname === "/privacy" ||
-    pathname === "/callback" ||
-    pathname === "/auth/callback" ||
-    pathname.startsWith("/s/") ||
-    pathname.startsWith("/pro/")
-  ) {
-    return NextResponse.next();
-  }
-
-  if (!isGatedPath(pathname)) return NextResponse.next();
+  // 3) Public routes
+  const publicPaths = [
+    "/",
+    "/login",
+    "/signup",
+    "/billing",
+    "/terms",
+    "/privacy",
+    "/callback",
+    "/auth/callback",
+    "/pro/success", // IMPORTANT: must be reachable after Stripe returns
+  ];
+  if (publicPaths.includes(pathname)) return NextResponse.next();
 
   const res = NextResponse.next();
 
@@ -64,9 +66,9 @@ export async function middleware(req: NextRequest) {
     },
   });
 
-  // ✅ Must be logged in
-  const { data: auth } = await supabase.auth.getUser();
-  const user = auth?.user;
+  // 4) Auth gate
+  const { data } = await supabase.auth.getUser();
+  const user = data?.user;
 
   if (!user) {
     const url = req.nextUrl.clone();
@@ -75,25 +77,33 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // ✅ Must be entitled (webhook writes entitlements)
-  const { data: ent } = await supabase
-    .from("entitlements")
-    .select("status,current_period_end")
-    .eq("user_id", user.id)
-    .maybeSingle();
+  // 5) Entitlement gate (only for paid paths)
+  if (isPaidPath(pathname)) {
+    const ent = await supabase
+      .from("entitlements")
+      .select("status,current_period_end,updated_at")
+      .eq("user_id", user.id)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-  const active = ent?.status === "active" || ent?.status === "trialing";
-  if (active) return res;
+    const ok = !ent.error && ent.data && isActive(ent.data.status ?? null, ent.data.current_period_end ?? null);
 
-  const url = req.nextUrl.clone();
-  url.pathname = "/billing";
-  url.search = `?next=${encodeURIComponent(pathname + search)}`;
-  return NextResponse.redirect(url);
+    if (!ok) {
+      const url = req.nextUrl.clone();
+      url.pathname = "/billing";
+      url.search = `?next=${encodeURIComponent(pathname + search)}`;
+      return NextResponse.redirect(url);
+    }
+  }
+
+  return res;
 }
 
 export const config = {
   matcher: ["/:path*"],
 };
+
 
 
 
