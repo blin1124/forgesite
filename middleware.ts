@@ -1,17 +1,24 @@
-import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
-import { supabaseAdmin } from "@/lib/supabase/admin";
+
+function isGatedPath(pathname: string) {
+  return (
+    pathname.startsWith("/builder") ||
+    pathname.startsWith("/sites") ||
+    pathname.startsWith("/domain") ||
+    pathname.startsWith("/templates") ||
+    pathname.startsWith("/account") ||
+    pathname.startsWith("/settings")
+  );
+}
 
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
 
-  // ✅ 1) NEVER protect API routes (fixes /api/checkout redirecting to /login)
-  if (pathname.startsWith("/api")) {
-    return NextResponse.next();
-  }
+  // ✅ Never gate API routes
+  if (pathname.startsWith("/api")) return NextResponse.next();
 
-  // ✅ 2) Allow Next.js internals + static assets
+  // ✅ Next.js internals / assets
   if (
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon.ico") ||
@@ -20,24 +27,24 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // ✅ 3) Public pages that must remain accessible
-  const publicPaths = [
-    "/",
-    "/login",
-    "/signup",
-    "/billing",
-    "/callback",
-    "/auth/callback",
-    "/terms",
-    "/privacy",
-    "/pro/success",
-  ];
-
-  if (publicPaths.includes(pathname)) {
+  // ✅ Always public pages
+  if (
+    pathname === "/" ||
+    pathname === "/login" ||
+    pathname === "/signup" ||
+    pathname === "/billing" ||
+    pathname === "/terms" ||
+    pathname === "/privacy" ||
+    pathname === "/callback" ||
+    pathname === "/auth/callback" ||
+    pathname.startsWith("/s/") ||
+    pathname.startsWith("/pro/")
+  ) {
     return NextResponse.next();
   }
 
-  // ✅ 4) Supabase session check for everything else
+  if (!isGatedPath(pathname)) return NextResponse.next();
+
   const res = NextResponse.next();
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -57,10 +64,10 @@ export async function middleware(req: NextRequest) {
     },
   });
 
-  const { data } = await supabase.auth.getUser();
-  const user = data?.user;
+  // ✅ Must be logged in
+  const { data: auth } = await supabase.auth.getUser();
+  const user = auth?.user;
 
-  // Not logged in -> login
   if (!user) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
@@ -68,46 +75,26 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // ✅ 5) Entitlement gate: builder + other protected pages require active entitlement
-  // Adjust this list to whatever should be paid-only.
-  const paidOnlyPrefixes = ["/builder", "/sites", "/templates", "/team", "/settings", "/uploads", "/domain"];
+  // ✅ Must be entitled (webhook writes entitlements)
+  const { data: ent } = await supabase
+    .from("entitlements")
+    .select("status,current_period_end")
+    .eq("user_id", user.id)
+    .maybeSingle();
 
-  const isPaidOnly = paidOnlyPrefixes.some(
-    (p) => pathname === p || pathname.startsWith(p + "/")
-  );
+  const active = ent?.status === "active" || ent?.status === "trialing";
+  if (active) return res;
 
-  if (isPaidOnly) {
-    // Check entitlement in DB (service role)
-    const { data: ent } = await supabaseAdmin
-      .from("entitlements")
-      .select("status,current_period_end")
-      .eq("user_id", user.id)
-      .maybeSingle();
-
-    const status = (ent?.status || "").toLowerCase();
-    const cpe = ent?.current_period_end ? new Date(ent.current_period_end).getTime() : null;
-    const now = Date.now();
-
-    const active =
-      status === "active" ||
-      status === "trialing" ||
-      (status === "past_due" && cpe && cpe > now); // optional leniency
-
-    if (!active) {
-      const url = req.nextUrl.clone();
-      url.pathname = "/billing";
-      url.search = `?next=${encodeURIComponent(pathname + search)}`;
-      return NextResponse.redirect(url);
-    }
-  }
-
-  return res;
+  const url = req.nextUrl.clone();
+  url.pathname = "/billing";
+  url.search = `?next=${encodeURIComponent(pathname + search)}`;
+  return NextResponse.redirect(url);
 }
 
-// ✅ apply middleware to all routes (but we early-return above for /api and assets)
 export const config = {
   matcher: ["/:path*"],
 };
+
 
 
 
