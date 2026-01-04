@@ -18,12 +18,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing session_id" }, { status: 400 });
     }
 
-    // Retrieve checkout session + subscription
+    // Pull session, and expand customer/subscription if possible
     const session = await stripe.checkout.sessions.retrieve(sessionId, {
       expand: ["subscription", "customer"],
     });
 
-    const userId = session.metadata?.supabase_user_id;
+    const userId = (session.metadata?.supabase_user_id || "").trim();
     if (!userId) {
       return NextResponse.json(
         { error: "Missing supabase_user_id in session metadata" },
@@ -36,17 +36,23 @@ export async function POST(req: Request) {
         ? session.customer
         : session.customer?.id ?? null;
 
-    const subscription =
-      typeof session.subscription === "string"
-        ? await stripe.subscriptions.retrieve(session.subscription)
-        : session.subscription;
+    // Subscription might be expanded object, string id, null, or deleted type depending on Stripe typings
+    let subscription: any = null;
 
-    const status = subscription?.status ?? "inactive";
-    const currentPeriodEnd = subscription?.current_period_end
-      ? new Date(subscription.current_period_end * 1000).toISOString()
-      : null;
+    if (typeof session.subscription === "string" && session.subscription) {
+      subscription = await stripe.subscriptions.retrieve(session.subscription);
+    } else if (session.subscription) {
+      subscription = session.subscription as any;
+    }
 
-    // 🔥 THIS is what unlocks the Builder
+    const status: string = subscription?.status ?? "inactive";
+
+    // ✅ Stripe types sometimes don't include current_period_end even though it exists at runtime
+    const cpe = subscription?.current_period_end;
+    const currentPeriodEnd =
+      typeof cpe === "number" ? new Date(cpe * 1000).toISOString() : null;
+
+    // Upsert entitlement (this unlocks middleware gate)
     const { error } = await supabaseAdmin
       .from("entitlements")
       .upsert(
@@ -58,7 +64,7 @@ export async function POST(req: Request) {
           status: isActive(status) ? status : "inactive",
           current_period_end: currentPeriodEnd,
           updated_at: new Date().toISOString(),
-        },
+        } as any,
         { onConflict: "user_id" }
       );
 
@@ -76,3 +82,5 @@ export async function POST(req: Request) {
     );
   }
 }
+
+
