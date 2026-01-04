@@ -1,13 +1,11 @@
-import { Suspense } from "react";
-import SuccessClient from "./SuccessClient";
+import SuccessClient from "./Client";
 
-export default function Page() {
-  return (
-    <Suspense fallback={<div style={{ padding: 24 }}>Finalizing…</div>}>
-      <SuccessClient />
-    </Suspense>
-  );
+export const dynamic = "force-dynamic";
+
+export default function SuccessPage() {
+  return <SuccessClient />;
 }
+
 
 
 
