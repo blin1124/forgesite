@@ -1,113 +1,90 @@
-import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
-function isAsset(pathname: string) {
-  return (
-    pathname.startsWith("/_next") ||
-    pathname.startsWith("/favicon.ico") ||
-    pathname.match(/\.(png|jpg|jpeg|gif|svg|webp|ico|css|js|map)$/i)
-  );
+export const config = {
+  matcher: [
+    // gate the builder + anything else you want protected
+    "/builder/:path*",
+    "/sites/:path*",
+    "/templates/:path*",
+    "/domain/:path*",
+  ],
+};
+
+function isActive(status: string | null | undefined) {
+  return status === "active" || status === "trialing";
 }
 
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
 
-  // 1) NEVER protect API routes
-  if (pathname.startsWith("/api")) return NextResponse.next();
+  // Always allow these (avoid blocking auth + stripe flows)
+  if (
+    pathname.startsWith("/api") ||
+    pathname.startsWith("/login") ||
+    pathname.startsWith("/billing") ||
+    pathname.startsWith("/pro/success")
+  ) {
+    return NextResponse.next();
+  }
 
-  // 2) Allow Next.js internals + static assets
-  if (isAsset(pathname)) return NextResponse.next();
-
-  // 3) Public pages
-  const publicPaths = [
-    "/",
-    "/login",
-    "/signup",
-    "/billing",
-    "/callback",
-    "/auth/callback",
-    "/terms",
-    "/privacy",
-    "/pro/success",
-  ];
-  if (publicPaths.includes(pathname)) return NextResponse.next();
-
-  // 4) Build Supabase server client using request cookies
   const res = NextResponse.next();
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-  if (!supabaseUrl || !supabaseAnon) return res;
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return req.cookies.getAll();
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            res.cookies.set(name, value, options);
+          });
+        },
+      },
+    }
+  );
 
-  const supabase = createServerClient(supabaseUrl, supabaseAnon, {
-    cookies: {
-      get(name: string) {
-        return req.cookies.get(name)?.value;
-      },
-      set(name: string, value: string, options: any) {
-        res.cookies.set({ name, value, ...options });
-      },
-      remove(name: string, options: any) {
-        res.cookies.set({ name, value: "", ...options });
-      },
-    },
-  });
+  // 1) Auth check
+  const { data: { user } } = await supabase.auth.getUser();
 
-  // 5) Auth gate
-  const { data: userData } = await supabase.auth.getUser();
-  const user = userData?.user;
+  const nextParam = encodeURIComponent(pathname + (search || ""));
 
   if (!user) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
-    url.search = `?next=${encodeURIComponent(pathname + search)}`;
+    url.search = `?next=${nextParam}`;
     return NextResponse.redirect(url);
   }
 
-  // 6) Entitlement gate (only for Builder routes — edit these rules as you want)
-  const needsEntitlement =
-    pathname === "/builder" ||
-    pathname.startsWith("/builder/") ||
-    pathname === "/sites" ||
-    pathname.startsWith("/sites/") ||
-    pathname === "/templates" ||
-    pathname.startsWith("/templates/") ||
-    pathname === "/domain" ||
-    pathname.startsWith("/domain/");
+  // 2) Entitlement check (expects entitlements.user_id = auth.uid())
+  const { data: ent, error } = await supabase
+    .from("entitlements")
+    .select("status, current_period_end")
+    .eq("user_id", user.id)
+    .maybeSingle();
 
-  if (needsEntitlement) {
-    // IMPORTANT:
-    // This assumes your `entitlements` table is readable for the logged-in user.
-    // If you turned ON RLS for entitlements, add the policy: user_id = auth.uid().
-    const { data: ent, error } = await supabase
-      .from("entitlements")
-      .select("status,current_period_end")
-      .eq("user_id", user.id)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    const status = (ent?.status || "").toLowerCase();
-
-    // Treat these as "paid/active"
-    const isActive =
-      status === "active" || status === "trialing" || status === "paid";
-
-    if (error || !ent || !isActive) {
-      const url = req.nextUrl.clone();
-      url.pathname = "/billing";
-      url.search = `?next=${encodeURIComponent(pathname + search)}`;
-      return NextResponse.redirect(url);
-    }
+  if (error) {
+    // If RLS blocks this or table missing, you’ll see it immediately
+    const url = req.nextUrl.clone();
+    url.pathname = "/billing";
+    url.search = `?next=${nextParam}`;
+    return NextResponse.redirect(url);
   }
 
+  if (!ent || !isActive(ent.status)) {
+    const url = req.nextUrl.clone();
+    url.pathname = "/billing";
+    url.search = `?next=${nextParam}`;
+    return NextResponse.redirect(url);
+  }
+
+  // Allowed
   return res;
 }
 
-export const config = {
-  matcher: ["/:path*"],
-};
 
 
 
