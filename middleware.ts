@@ -2,28 +2,31 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 export const config = {
-  matcher: [
-    // gate the builder + anything else you want protected
-    "/builder/:path*",
-    "/sites/:path*",
-    "/templates/:path*",
-    "/domain/:path*",
-  ],
+  matcher: ["/builder/:path*", "/sites/:path*", "/templates/:path*", "/domain/:path*"],
 };
 
 function isActive(status: string | null | undefined) {
   return status === "active" || status === "trialing";
 }
 
+function notExpired(currentPeriodEnd: string | null | undefined) {
+  if (!currentPeriodEnd) return true; // if you don't store it, don't block
+  const t = Date.parse(currentPeriodEnd);
+  if (Number.isNaN(t)) return true;
+  return t > Date.now();
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
 
-  // Always allow these (avoid blocking auth + stripe flows)
+  // Never block these (safety)
   if (
     pathname.startsWith("/api") ||
     pathname.startsWith("/login") ||
     pathname.startsWith("/billing") ||
-    pathname.startsWith("/pro/success")
+    pathname.startsWith("/pro/success") ||
+    pathname.startsWith("/_next") ||
+    pathname === "/favicon.ico"
   ) {
     return NextResponse.next();
   }
@@ -47,10 +50,11 @@ export async function middleware(req: NextRequest) {
     }
   );
 
-  // 1) Auth check
-  const { data: { user } } = await supabase.auth.getUser();
-
   const nextParam = encodeURIComponent(pathname + (search || ""));
+
+  // 1) Auth check
+  const { data: userRes } = await supabase.auth.getUser();
+  const user = userRes?.user;
 
   if (!user) {
     const url = req.nextUrl.clone();
@@ -59,29 +63,21 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // 2) Entitlement check (expects entitlements.user_id = auth.uid())
+  // 2) Entitlement check
   const { data: ent, error } = await supabase
     .from("entitlements")
     .select("status, current_period_end")
     .eq("user_id", user.id)
     .maybeSingle();
 
-  if (error) {
-    // If RLS blocks this or table missing, you’ll see it immediately
+  // If query fails or row missing or not active → billing
+  if (error || !ent || !isActive(ent.status) || !notExpired(ent.current_period_end)) {
     const url = req.nextUrl.clone();
     url.pathname = "/billing";
     url.search = `?next=${nextParam}`;
     return NextResponse.redirect(url);
   }
 
-  if (!ent || !isActive(ent.status)) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/billing";
-    url.search = `?next=${nextParam}`;
-    return NextResponse.redirect(url);
-  }
-
-  // Allowed
   return res;
 }
 
