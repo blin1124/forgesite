@@ -5,83 +5,74 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
-function isActive(status: string | null | undefined) {
-  return status === "active" || status === "trialing";
-}
-
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const sessionId = body?.session_id;
+    const session_id = String(body.session_id || "").trim();
 
-    if (!sessionId) {
+    if (!session_id) {
       return NextResponse.json({ error: "Missing session_id" }, { status: 400 });
     }
 
-    // Pull session, and expand customer/subscription if possible
-    const session = await stripe.checkout.sessions.retrieve(sessionId, {
-      expand: ["subscription", "customer"],
-    });
+    // 1) Load checkout session from Stripe
+    const session = await stripe.checkout.sessions.retrieve(session_id);
 
-    const userId = (session.metadata?.supabase_user_id || "").trim();
+    // Must be subscription checkout
+    if (session.mode !== "subscription") {
+      return NextResponse.json({ error: "Not a subscription checkout session" }, { status: 400 });
+    }
+
+    const customerId = String(session.customer || "");
+    const subscriptionId = String(session.subscription || "");
+    const userId = String(session.metadata?.supabase_user_id || "").trim();
+    const email =
+      (session.customer_details?.email || session.customer_email || "").toLowerCase() || null;
+
     if (!userId) {
       return NextResponse.json(
-        { error: "Missing supabase_user_id in session metadata" },
+        { error: "Missing supabase_user_id in session metadata. (Checkout route must set it.)" },
         { status: 400 }
       );
     }
 
-    const customerId =
-      typeof session.customer === "string"
-        ? session.customer
-        : session.customer?.id ?? null;
+    // 2) Pull subscription for status + period end
+    let status: string | null = null;
+    let currentPeriodEnd: string | null = null;
 
-    // Subscription might be expanded object, string id, null, or deleted type depending on Stripe typings
-    let subscription: any = null;
+    if (subscriptionId) {
+      const sub = await stripe.subscriptions.retrieve(subscriptionId);
 
-    if (typeof session.subscription === "string" && session.subscription) {
-      subscription = await stripe.subscriptions.retrieve(session.subscription);
-    } else if (session.subscription) {
-      subscription = session.subscription as any;
+      status = (sub as any)?.status ?? null;
+
+      const cpe = (sub as any)?.current_period_end;
+      currentPeriodEnd = cpe ? new Date(cpe * 1000).toISOString() : null;
     }
 
-    const status: string = subscription?.status ?? "inactive";
+    // 3) Upsert entitlement row for this user (service role bypasses RLS)
+    const { error: upErr } = await supabaseAdmin.from("entitlements").upsert(
+      {
+        user_id: userId,
+        email,
+        stripe_customer_id: customerId || null,
+        stripe_subscription_id: subscriptionId || null,
+        status: status || "active",
+        current_period_end: currentPeriodEnd,
+        updated_at: new Date().toISOString(),
+      } as any,
+      { onConflict: "user_id" }
+    );
 
-    // ✅ Stripe types sometimes don't include current_period_end even though it exists at runtime
-    const cpe = subscription?.current_period_end;
-    const currentPeriodEnd =
-      typeof cpe === "number" ? new Date(cpe * 1000).toISOString() : null;
-
-    // Upsert entitlement (this unlocks middleware gate)
-    const { error } = await supabaseAdmin
-      .from("entitlements")
-      .upsert(
-        {
-          user_id: userId,
-          email: session.customer_details?.email?.toLowerCase() ?? null,
-          stripe_customer_id: customerId,
-          stripe_subscription_id: subscription?.id ?? null,
-          status: isActive(status) ? status : "inactive",
-          current_period_end: currentPeriodEnd,
-          updated_at: new Date().toISOString(),
-        } as any,
-        { onConflict: "user_id" }
-      );
-
-    if (error) {
-      console.error("Entitlement upsert failed:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    if (upErr) {
+      return NextResponse.json({ error: upErr.message }, { status: 500 });
     }
 
     return NextResponse.json({ ok: true });
   } catch (err: any) {
-    console.error("Confirm error:", err);
-    return NextResponse.json(
-      { error: err?.message || "Confirm failed" },
-      { status: 500 }
-    );
+    console.error("confirm route error:", err);
+    return NextResponse.json({ error: err?.message || "Confirm failed" }, { status: 500 });
   }
 }
+
 
 
 
