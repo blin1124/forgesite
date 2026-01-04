@@ -2,31 +2,30 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 export const config = {
-  matcher: ["/builder/:path*", "/sites/:path*", "/templates/:path*", "/domain/:path*"],
+  matcher: [
+    "/builder/:path*",
+    "/sites/:path*",
+    "/templates/:path*",
+    "/domain/:path*",
+  ],
 };
 
 function isActive(status: string | null | undefined) {
   return status === "active" || status === "trialing";
 }
 
-function notExpired(currentPeriodEnd: string | null | undefined) {
-  if (!currentPeriodEnd) return true; // if you don't store it, don't block
-  const t = Date.parse(currentPeriodEnd);
-  if (Number.isNaN(t)) return true;
-  return t > Date.now();
-}
-
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
 
-  // Never block these (safety)
+  // never block these (prevents checkout/confirm/login loops)
   if (
     pathname.startsWith("/api") ||
     pathname.startsWith("/login") ||
+    pathname.startsWith("/signup") ||
     pathname.startsWith("/billing") ||
     pathname.startsWith("/pro/success") ||
-    pathname.startsWith("/_next") ||
-    pathname === "/favicon.ico"
+    pathname.startsWith("/terms") ||
+    pathname.startsWith("/privacy")
   ) {
     return NextResponse.next();
   }
@@ -50,11 +49,12 @@ export async function middleware(req: NextRequest) {
     }
   );
 
-  const nextParam = encodeURIComponent(pathname + (search || ""));
+  // 1) Auth
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  // 1) Auth check
-  const { data: userRes } = await supabase.auth.getUser();
-  const user = userRes?.user;
+  const nextParam = encodeURIComponent(pathname + (search || ""));
 
   if (!user) {
     const url = req.nextUrl.clone();
@@ -63,15 +63,15 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // 2) Entitlement check
+  // 2) Entitlement
   const { data: ent, error } = await supabase
     .from("entitlements")
     .select("status, current_period_end")
     .eq("user_id", user.id)
     .maybeSingle();
 
-  // If query fails or row missing or not active → billing
-  if (error || !ent || !isActive(ent.status) || !notExpired(ent.current_period_end)) {
+  // if RLS blocks select or row missing -> billing
+  if (error || !ent || !isActive(ent.status)) {
     const url = req.nextUrl.clone();
     url.pathname = "/billing";
     url.search = `?next=${nextParam}`;
