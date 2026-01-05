@@ -7,12 +7,6 @@ function jsonError(message: string, status = 500) {
   return NextResponse.json({ error: message }, { status });
 }
 
-/**
- * SAFE DESIGN GOAL:
- * - Chat can help users rewrite the WEBSITE PROMPT (left textbox).
- * - Chat must NEVER output HTML/CSS/JS/code blocks.
- * - Chat returns JSON only: { reply, prompt_update }.
- */
 const SYSTEM = [
   "You are ForgeSite's prompt assistant.",
   "Your job is to rewrite the user's WEBSITE PROMPT (the left textbox) based on what they ask in chat.",
@@ -20,10 +14,10 @@ const SYSTEM = [
   "NEVER return HTML, CSS, JS, or code blocks.",
   "NEVER instruct the user to edit files.",
   "If the user asks for changes, incorporate them into a clean, detailed prompt spec.",
-  "If an image/logo is provided, instruct the website to include the logo (header and/or hero) and reference it by URL.",
-  "If a PDF is provided, instruct the website to include a Documents section with (1) a View link opening in a new tab, (2) a Download link, and (3) an embedded preview using an iframe.",
-  "If a DOCX/XLSX is provided, instruct the website to include a Documents section with View/Download links (no embed).",
-  "Keep prompt_update as a single cohesive prompt (not bullet fragments).",
+  "If an image/logo is provided, instruct the website to include the logo and reference it by URL.",
+  "If a PDF is provided, instruct the website to include a Documents section with (1) View link (new tab), (2) Download link, (3) embedded preview using <object>.",
+  "If a DOCX/XLSX is provided, include Documents section with View/Download links (no embed).",
+  "Keep prompt_update as a single cohesive prompt.",
   "If currentPrompt is empty, create a fresh prompt from the user's request.",
 ].join(" ");
 
@@ -58,10 +52,6 @@ function classifyFile(mime?: string | null) {
   return { isImage, isPdf, isDocx, isXlsx };
 }
 
-/**
- * Uses the model to produce strict JSON: { reply, prompt_update }
- * Ensures PDFs are described in prompt_update as link + iframe embed instructions.
- */
 async function producePromptUpdate(args: {
   client: OpenAI;
   message: string;
@@ -82,7 +72,6 @@ async function producePromptUpdate(args: {
       ? `Attachment provided (${file_mime || "unknown"}). URL: ${file_url}`
       : "";
 
-  // Add extra “hard instructions” for the model so it reliably handles PDFs.
   const attachmentDirective = (() => {
     if (!isHttpUrl(file_url)) return "";
 
@@ -90,7 +79,7 @@ async function producePromptUpdate(args: {
       return [
         "Attachment handling requirement:",
         "- This is an image/logo. The generated website MUST display it.",
-        "- Place it in the header and/or hero area (top left by default unless user specified).",
+        "- Place it in the header and/or hero area.",
         `- Use this URL exactly: ${file_url}`,
       ].join("\n");
     }
@@ -103,7 +92,7 @@ async function producePromptUpdate(args: {
         "- Include:",
         "  1) 'View PDF' link opening in a new tab (target=_blank).",
         "  2) 'Download PDF' link.",
-        "  3) An embedded preview using an iframe (full width, ~700px height) with a fallback link if embedding fails.",
+        "  3) An embedded preview using an <object> tag (~700px height) with a fallback link.",
         `- Use this PDF URL exactly: ${file_url}`,
       ].join("\n");
     }
@@ -114,38 +103,34 @@ async function producePromptUpdate(args: {
         "- This is an office document (DOCX/XLSX).",
         "- Add a 'Documents' (or 'Resources') section.",
         "- Include a 'View' link (opens in a new tab) and a 'Download' link.",
-        "- Do NOT embed in an iframe.",
+        "- Do NOT embed in an iframe/object.",
         `- Use this URL exactly: ${file_url}`,
       ].join("\n");
     }
 
     return [
       "Attachment handling requirement:",
-      "- A file was provided. Add a 'Documents' (or 'Resources') section with a link to open/download it.",
+      "- A file was provided. Add a 'Documents' section with open/download link.",
       `- Use this URL exactly: ${file_url}`,
     ].join("\n");
   })();
 
-  const model = "gpt-4o-mini";
-
-  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: SYSTEM },
-  ];
-
-  for (const m of history) messages.push(m);
-
-  const userText = [
-    `User chat request: ${message}`,
-    currentPrompt?.trim() ? `\n\nCURRENT PROMPT:\n${currentPrompt.trim()}` : "\n\nCURRENT PROMPT is empty.",
-    fileNote ? `\n\n${fileNote}` : "",
-    attachmentDirective ? `\n\n${attachmentDirective}` : "",
-    "\n\nTask: Rewrite prompt_update as one cohesive website prompt spec incorporating the user's request and any attachment handling requirements.",
-    "Return ONLY JSON: { reply, prompt_update }.",
-  ].join("\n");
-
   const resp = await client.chat.completions.create({
-    model,
-    messages: [{ role: "system", content: SYSTEM }, ...messages.slice(1), { role: "user", content: userText }],
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "system", content: SYSTEM },
+      ...history,
+      {
+        role: "user",
+        content: [
+          `User chat request: ${message}`,
+          currentPrompt?.trim() ? `\n\nCURRENT PROMPT:\n${currentPrompt.trim()}` : "\n\nCURRENT PROMPT is empty.",
+          fileNote ? `\n\n${fileNote}` : "",
+          attachmentDirective ? `\n\n${attachmentDirective}` : "",
+          "\n\nReturn ONLY JSON: { reply, prompt_update }.",
+        ].join("\n"),
+      },
+    ],
     temperature: 0.3,
     max_tokens: 600,
     response_format: { type: "json_object" },
@@ -160,11 +145,10 @@ async function producePromptUpdate(args: {
     parsed = { reply: "OK", prompt_update: currentPrompt || "" };
   }
 
-  const reply = typeof parsed.reply === "string" ? parsed.reply : "OK";
-  const prompt_update =
-    typeof parsed.prompt_update === "string" ? parsed.prompt_update : currentPrompt || "";
-
-  return { reply, prompt_update };
+  return {
+    reply: typeof parsed.reply === "string" ? parsed.reply : "OK",
+    prompt_update: typeof parsed.prompt_update === "string" ? parsed.prompt_update : currentPrompt || "",
+  };
 }
 
 export async function POST(req: Request) {
@@ -176,21 +160,13 @@ export async function POST(req: Request) {
     const currentPrompt = String(body?.currentPrompt || "");
     const history = cleanHistory(body?.history);
 
-    // These must be passed from your Builder after /api/upload succeeds
     const file_url = body?.file_url ? String(body.file_url) : null;
     const file_mime = body?.file_mime ? String(body.file_mime) : null;
     const file_name = body?.file_name ? String(body.file_name) : null;
 
-    if (!apiKey || !apiKey.startsWith("sk-")) {
-      return jsonError("Missing/invalid OpenAI API key.", 400);
-    }
-    if (!message.trim() && !file_url) {
-      return jsonError("No message provided.", 400);
-    }
-
-    if (file_url && !isHttpUrl(file_url)) {
-      return jsonError("Invalid file_url (must start with http/https).", 400);
-    }
+    if (!apiKey || !apiKey.startsWith("sk-")) return jsonError("Missing/invalid OpenAI API key.", 400);
+    if (!message.trim() && !file_url) return jsonError("No message provided.", 400);
+    if (file_url && !isHttpUrl(file_url)) return jsonError("Invalid file_url (must start with http/https).", 400);
 
     const client = new OpenAI({ apiKey });
 
