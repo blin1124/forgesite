@@ -1,180 +1,115 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
-type Msg = { role: "user" | "assistant"; content: string };
+type SiteRow = {
+  id: string;
+  template: string | null;
+  prompt: string | null;
+  html: string | null;
+  created_at: string;
+};
 
-function lsGet(k: string) {
-  try { return localStorage.getItem(k) || ""; } catch { return ""; }
+type ChatMsg = { role: "user" | "assistant"; content: string };
+
+function lsGet(key: string) {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(key) || "";
 }
-function lsSet(k: string, v: string) {
-  try { localStorage.setItem(k, v); } catch {}
+function lsSet(key: string, val: string) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(key, val);
 }
 
 export default function BuilderClient() {
   const router = useRouter();
-  const sp = useSearchParams();
-  const next = useMemo(() => sp.get("next") || "/builder", [sp]);
 
-  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
-
+  // auth display
   const [email, setEmail] = useState<string>("");
+
+  // OpenAI key (local only)
   const [apiKey, setApiKey] = useState<string>("");
+
+  // prompt + html
   const [prompt, setPrompt] = useState<string>("");
-  const [chatInput, setChatInput] = useState<string>("");
-  const [history, setHistory] = useState<Msg[]>([]);
   const [html, setHtml] = useState<string>("");
-  const [saving, setSaving] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [chatting, setChatting] = useState(false);
-  const [msg, setMsg] = useState<string>("");
 
-  // attachment (optional)
-  const [fileUrl, setFileUrl] = useState<string | null>(null);
-  const [fileName, setFileName] = useState<string | null>(null);
-  const [fileMime, setFileMime] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
+  // upload state
+  const [fileUrl, setFileUrl] = useState<string>("");
+  const [fileMime, setFileMime] = useState<string>("");
+  const [fileName, setFileName] = useState<string>("");
 
-  // Sites list (basic)
-  const [sites, setSites] = useState<any[]>([]);
-  const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
+  // sites list
+  const [sites, setSites] = useState<SiteRow[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // chat
+  const [history, setHistory] = useState<ChatMsg[]>([]);
+  const [chatInput, setChatInput] = useState<string>("");
+
+  const [busy, setBusy] = useState<string>("");
+
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+
+  const canUseAI = useMemo(() => apiKey.trim().startsWith("sk-"), [apiKey]);
 
   useEffect(() => {
-    // load OpenAI key from localStorage
     setApiKey(lsGet("forgesite_openai_key"));
+    setPrompt(lsGet("forgesite_prompt"));
+  }, []);
 
-    const boot = async () => {
-      const { data } = await supabase.auth.getUser();
-      const u = data?.user;
-      if (!u) {
-        router.replace(`/login?next=${encodeURIComponent(next)}`);
-        return;
-      }
-      setEmail(u.email || "");
+  useEffect(() => {
+    lsSet("forgesite_openai_key", apiKey);
+  }, [apiKey]);
 
-      // load sites for this user
-      const { data: rows } = await supabase
-        .from("sites")
-        .select("id, created_at, template, content, html")
-        .eq("user_id", u.id)
-        .order("created_at", { ascending: false });
+  useEffect(() => {
+    lsSet("forgesite_prompt", prompt);
+  }, [prompt]);
 
-      setSites(rows || []);
+  useEffect(() => {
+    const run = async () => {
+      const supabase = createSupabaseBrowserClient();
+      const { data } = await supabase.auth.getSession();
+      const userEmail = data?.session?.user?.email || "";
+      setEmail(userEmail);
+
+      await refreshSites();
     };
-
-    boot();
-  }, [router, next, supabase]);
+    run();
+  }, []);
 
   async function refreshSites() {
-    const { data } = await supabase.auth.getUser();
-    const u = data?.user;
-    if (!u) return;
-
-    const { data: rows } = await supabase
-      .from("sites")
-      .select("id, created_at, template, content, html")
-      .eq("user_id", u.id)
-      .order("created_at", { ascending: false });
-
-    setSites(rows || []);
+    const res = await fetch("/api/sites/list");
+    const data = await res.json().catch(() => ({}));
+    setSites(Array.isArray(data?.sites) ? data.sites : []);
   }
 
-  async function onLogout() {
-    await supabase.auth.signOut();
-    router.replace("/login");
-  }
-
-  async function uploadFile(file: File) {
-    setMsg("");
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-
-      const res = await fetch("/api/upload", { method: "POST", body: fd });
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) throw new Error(data?.error || `Upload failed (${res.status})`);
-
-      setFileUrl(data.file_url || null);
-      setFileName(data.file_name || file.name);
-      setFileMime(data.file_mime || file.type || null);
-
-      // Add a note in chat history so user sees it
-      setHistory((h) => [
-        ...h,
-        { role: "assistant", content: `Attached: ${data.file_name}. I’ll incorporate it into your site prompt when you ask.` },
-      ]);
-    } catch (e: any) {
-      setMsg(e?.message || "Upload failed");
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  async function runChat() {
-    setMsg("");
-    if (!apiKey || !apiKey.startsWith("sk-")) {
-      setMsg("Add your OpenAI API key first (starts with sk-).");
-      return;
-    }
-    if (!chatInput.trim() && !fileUrl) {
-      setMsg("Type a message or upload a file.");
-      return;
-    }
-
-    const userMessage = chatInput.trim() || (fileUrl ? "Use the attached file in my website." : "");
+  async function loadSite(id: string) {
+    const found = sites.find((s) => s.id === id);
+    if (!found) return;
+    setSelectedId(id);
+    setPrompt(found.prompt || "");
+    setHtml(found.html || "");
+    setHistory([]);
     setChatInput("");
-
-    const nextHistory: Msg[] = [...history, { role: "user", content: userMessage }];
-    setHistory(nextHistory);
-    setChatting(true);
-
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          apiKey,
-          message: userMessage,
-          currentPrompt: prompt,
-          history: nextHistory,
-          file_url: fileUrl,
-          file_name: fileName,
-          file_mime: fileMime,
-        }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `Chat failed (${res.status})`);
-
-      const reply = String(data?.reply || "OK");
-      const prompt_update = String(data?.prompt_update || prompt);
-
-      setHistory((h) => [...h, { role: "assistant", content: reply }]);
-      setPrompt(prompt_update);
-    } catch (e: any) {
-      setMsg(e?.message || "Chat failed");
-    } finally {
-      setChatting(false);
-    }
   }
 
   async function generateHtml() {
-    setMsg("");
-    if (!apiKey || !apiKey.startsWith("sk-")) {
-      setMsg("Add your OpenAI API key first (starts with sk-).");
+    setBusy("");
+    if (!canUseAI) {
+      setBusy("Paste your OpenAI key first.");
       return;
     }
     if (!prompt.trim()) {
-      setMsg("Enter a website prompt first (or use chat to build one).");
+      setBusy("Enter a website prompt first.");
       return;
     }
 
-    setGenerating(true);
     try {
+      setBusy("Generating HTML…");
+
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -182,178 +117,244 @@ export default function BuilderClient() {
       });
 
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `Generate failed (${res.status})`);
+      if (!res.ok) throw new Error(data?.error || "Generate failed");
 
       setHtml(String(data?.html || ""));
+      setBusy("");
     } catch (e: any) {
-      setMsg(e?.message || "Generate failed");
-    } finally {
-      setGenerating(false);
+      setBusy(e?.message || "Generate failed");
     }
   }
 
   async function saveSite() {
-    setMsg("");
-    if (!html.trim()) {
-      setMsg("Generate HTML first.");
-      return;
-    }
+    setBusy("");
+    if (!prompt.trim()) return setBusy("Prompt is empty.");
+    if (!html.trim()) return setBusy("HTML is empty. Generate first.");
 
-    setSaving(true);
     try {
-      const { data } = await supabase.auth.getUser();
-      const u = data?.user;
-      if (!u) {
-        router.replace(`/login?next=${encodeURIComponent(next)}`);
-        return;
-      }
+      setBusy("Saving…");
+      const res = await fetch("/api/sites/save", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          id: selectedId, // if null, insert new
+          template: "html",
+          prompt,
+          html,
+        }),
+      });
 
-      if (selectedSiteId) {
-        const { error } = await supabase
-          .from("sites")
-          .update({
-            content: prompt,
-            html,
-            template: "html",
-            user_id: u.id,
-          })
-          .eq("id", selectedSiteId)
-          .eq("user_id", u.id);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Save failed");
 
-        if (error) throw new Error(error.message);
-      } else {
-        const { data: inserted, error } = await supabase
-          .from("sites")
-          .insert({
-            user_id: u.id,
-            template: "html",
-            content: prompt,
-            html,
-          })
-          .select("id")
-          .single();
-
-        if (error) throw new Error(error.message);
-        setSelectedSiteId(inserted?.id || null);
-      }
+      const newId = String(data?.id || "");
+      setSelectedId(newId || selectedId);
 
       await refreshSites();
-      setMsg("Saved ✅");
+      setBusy("Saved ✅");
+      setTimeout(() => setBusy(""), 1200);
     } catch (e: any) {
-      setMsg(e?.message || "Save failed");
-    } finally {
-      setSaving(false);
+      setBusy(e?.message || "Save failed");
     }
   }
 
-  function loadSite(row: any) {
-    setSelectedSiteId(row.id);
-    setPrompt(row.content || "");
-    setHtml(row.html || "");
+  async function uploadFile(file: File) {
+    setBusy("");
+    try {
+      setBusy("Uploading…");
+
+      const form = new FormData();
+      form.append("file", file);
+
+      const res = await fetch("/api/upload", { method: "POST", body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Upload failed");
+
+      const u = String(data?.file_url || "");
+      const m = String(data?.file_mime || "");
+      const n = String(data?.file_name || file.name);
+
+      if (!u) throw new Error("Upload returned no public URL");
+
+      setFileUrl(u);
+      setFileMime(m);
+      setFileName(n);
+
+      // ✅ inject into prompt so generator ALWAYS sees it
+      setPrompt((p) => {
+        const block = `\n\nATTACHMENT:\nNAME: ${n}\nMIME: ${m}\nURL: ${u}\n`;
+        return p.includes(u) ? p : (p + block);
+      });
+
+      // ✅ auto-regenerate after upload
+      setTimeout(() => {
+        generateHtml();
+      }, 50);
+
+      setBusy("");
+    } catch (e: any) {
+      setBusy(e?.message || "Upload failed");
+    }
   }
 
-  function newSite() {
-    setSelectedSiteId(null);
-    setPrompt("");
-    setHtml("");
-    setHistory([]);
-    setFileUrl(null);
-    setFileName(null);
-    setFileMime(null);
+  async function runChat() {
+    setBusy("");
+    if (!canUseAI) return setBusy("Paste your OpenAI key first.");
+    if (!chatInput.trim() && !fileUrl) return setBusy("Type a message or upload a file.");
+
+    const userMsg: ChatMsg = { role: "user", content: chatInput.trim() || "(file attached)" };
+    const nextHistory = [...history, userMsg];
+
+    setHistory(nextHistory);
+    setChatInput("");
+
+    try {
+      setBusy("Thinking…");
+
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          apiKey,
+          message: userMsg.content,
+          currentPrompt: prompt,
+          history: nextHistory,
+          file_url: fileUrl || null,
+          file_mime: fileMime || null,
+          file_name: fileName || null,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Chat failed");
+
+      const reply = String(data?.reply || "OK");
+      const prompt_update = String(data?.prompt_update || prompt);
+
+      setHistory((h) => [...h, { role: "assistant", content: reply }]);
+
+      setPrompt(prompt_update);
+
+      // ✅ auto-regenerate after chat changes prompt
+      setTimeout(() => {
+        generateHtml();
+      }, 50);
+
+      setBusy("");
+    } catch (e: any) {
+      setBusy(e?.message || "Chat failed");
+    }
+  }
+
+  async function logout() {
+    const supabase = createSupabaseBrowserClient();
+    await supabase.auth.signOut();
+    router.push("/login?next=%2Fbuilder");
   }
 
   return (
-    <main style={page}>
-      <header style={header}>
+    <main
+      style={{
+        minHeight: "100vh",
+        padding: 16,
+        color: "white",
+        background:
+          "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(124,58,237) 0%, rgb(109,40,217) 35%, rgb(91,33,182) 100%)",
+        fontFamily:
+          'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
+      }}
+    >
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
         <div>
-          <div style={{ fontSize: 40, fontWeight: 900 }}>Builder</div>
-          <div style={{ opacity: 0.9, marginTop: 6 }}>
-            Signed in as <b>{email || "…"}</b>
-          </div>
+          <div style={{ fontSize: 44, fontWeight: 900, lineHeight: 1 }}>Builder</div>
+          <div style={{ opacity: 0.9 }}>Signed in as <b>{email || "unknown"}</b></div>
         </div>
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <button style={chipBtn} onClick={() => router.push("/sites")}>My Sites</button>
-          <button style={chipBtn} onClick={() => router.push("/templates")}>Templates</button>
-          <button style={chipBtn} onClick={() => router.push("/billing")}>Billing</button>
-          <button style={chipBtn} onClick={onLogout}>Log out</button>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button style={topBtn} onClick={() => router.push("/sites")}>My Sites</button>
+          <button style={topBtn} onClick={() => router.push("/templates")}>Templates</button>
+          <button style={topBtn} onClick={() => router.push("/billing")}>Billing</button>
+          <button style={topBtn} onClick={logout}>Log out</button>
         </div>
       </header>
 
-      <section style={shell}>
-        {/* Left column: Sites + Prompt + Chat */}
-        <div style={leftCol}>
-          <div style={card}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "420px 1fr", gap: 14, marginTop: 14 }}>
+        {/* LEFT */}
+        <div style={{ display: "grid", gap: 14 }}>
+          {/* Sites */}
+          <section style={card}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
                 <div style={{ fontSize: 18, fontWeight: 900 }}>My Sites</div>
                 <div style={{ opacity: 0.85, fontSize: 13 }}>{sites.length} site(s)</div>
               </div>
-              <button style={smallBtn} onClick={newSite}>+ New</button>
+              <button
+                style={smallBtn}
+                onClick={() => {
+                  setSelectedId(null);
+                  setPrompt("");
+                  setHtml("");
+                  setHistory([]);
+                  setChatInput("");
+                }}
+              >
+                + New
+              </button>
             </div>
 
             <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
               {sites.map((s) => (
                 <button
                   key={s.id}
-                  onClick={() => loadSite(s)}
+                  onClick={() => loadSite(s.id)}
                   style={{
-                    ...siteRow,
-                    outline: selectedSiteId === s.id ? "2px solid rgba(255,255,255,0.6)" : "none",
+                    ...siteBtn,
+                    borderColor: selectedId === s.id ? "rgba(255,255,255,0.65)" : "rgba(255,255,255,0.18)",
                   }}
                 >
-                  <div style={{ fontWeight: 900, textAlign: "left" }}>
-                    {String(s.template || "site")} · {String(s.id).slice(0, 7)}
-                  </div>
-                  <div style={{ opacity: 0.85, fontSize: 12, textAlign: "left" }}>
-                    {s.created_at ? new Date(s.created_at).toLocaleString() : ""}
+                  <div style={{ fontWeight: 900 }}>{(s.template || "html") + " • " + s.id.slice(0, 7)}</div>
+                  <div style={{ opacity: 0.85, fontSize: 12 }}>
+                    {new Date(s.created_at).toLocaleString()}
                   </div>
                 </button>
               ))}
             </div>
-          </div>
+          </section>
 
-          <div style={card}>
+          {/* OpenAI Key */}
+          <section style={card}>
             <div style={{ fontSize: 18, fontWeight: 900 }}>OpenAI Key (required)</div>
             <div style={{ opacity: 0.85, fontSize: 13, marginTop: 6 }}>
-              This is stored in your browser (local). Customers paste their own key before generating.
+              Stored in your browser (local). Customers paste their own key before generating.
             </div>
             <input
               value={apiKey}
-              onChange={(e) => {
-                setApiKey(e.target.value);
-                lsSet("forgesite_openai_key", e.target.value);
-              }}
-              placeholder="sk-…"
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="sk-..."
               type="password"
               style={{ ...input, marginTop: 10 }}
             />
-          </div>
+          </section>
 
-          <div style={card}>
+          {/* Prompt */}
+          <section style={card}>
             <div style={{ fontSize: 18, fontWeight: 900 }}>Website Prompt</div>
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Describe the site you want…"
-              style={textarea}
+              placeholder="Describe the site you want..."
+              style={{ ...textarea, marginTop: 10 }}
             />
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
-              <button style={primaryBtn} onClick={generateHtml} disabled={generating}>
-                {generating ? "Generating…" : "Generate HTML"}
-              </button>
-              <button style={secondaryBtn} onClick={saveSite} disabled={saving}>
-                {saving ? "Saving…" : "Save"}
-              </button>
+              <button style={primaryBtn} onClick={generateHtml}>Generate HTML</button>
+              <button style={secondaryBtn} onClick={saveSite}>Save</button>
 
-              <label style={{ ...secondaryBtn, cursor: uploading ? "not-allowed" : "pointer" }}>
-                {uploading ? "Uploading…" : "Upload PDF/PNG/DOCX/XLSX"}
+              <label style={uploadBtn}>
+                Upload PDF/PNG/DOCX/XLSX
                 <input
                   type="file"
-                  accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.xls,.xlsx"
                   style={{ display: "none" }}
-                  disabled={uploading}
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     if (f) uploadFile(f);
@@ -363,35 +364,30 @@ export default function BuilderClient() {
               </label>
             </div>
 
-            {fileUrl ? (
-              <div style={{ marginTop: 10, fontSize: 13, opacity: 0.95 }}>
-                Attached: <b>{fileName}</b> ({fileMime})
+            {busy ? (
+              <div style={{ marginTop: 10, padding: 10, borderRadius: 12, background: "rgba(0,0,0,0.25)" }}>
+                {busy}
               </div>
             ) : null}
+          </section>
 
-            {msg ? (
-              <div style={errorBox}>{msg}</div>
-            ) : null}
-          </div>
-
-          <div style={card}>
+          {/* Chat */}
+          <section style={card}>
             <div style={{ fontSize: 18, fontWeight: 900 }}>AI Chat (updates prompt)</div>
 
             <div style={chatBox}>
               {history.length === 0 ? (
-                <div style={{ opacity: 0.8 }}>
-                  Ask the AI to modify your site (colors, sections, copy, layout). Upload a doc/pdf/logo too.
+                <div style={{ opacity: 0.8, fontSize: 13 }}>
+                  Ask the AI to adjust the prompt. Uploads are included automatically.
                 </div>
-              ) : (
-                history.map((m, i) => (
-                  <div key={i} style={{ marginBottom: 10 }}>
-                    <div style={{ fontWeight: 900, opacity: 0.9 }}>
-                      {m.role === "user" ? "You" : "AI"}
-                    </div>
-                    <div style={{ whiteSpace: "pre-wrap", opacity: 0.95 }}>{m.content}</div>
-                  </div>
-                ))
-              )}
+              ) : null}
+
+              {history.map((m, idx) => (
+                <div key={idx} style={{ marginTop: 10 }}>
+                  <div style={{ fontWeight: 900 }}>{m.role === "user" ? "You" : "AI"}</div>
+                  <div style={{ opacity: 0.92, whiteSpace: "pre-wrap" }}>{m.content}</div>
+                </div>
+              ))}
             </div>
 
             <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
@@ -400,93 +396,36 @@ export default function BuilderClient() {
                 onChange={(e) => setChatInput(e.target.value)}
                 placeholder="Tell the AI what to change…"
                 style={{ ...input, flex: 1 }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") runChat();
-                }}
               />
-              <button style={primaryBtn} onClick={runChat} disabled={chatting}>
-                {chatting ? "…" : "Send"}
-              </button>
+              <button style={primaryBtn} onClick={runChat}>Send</button>
             </div>
-          </div>
+          </section>
         </div>
 
-        {/* Right column: Preview */}
-        <div style={rightCol}>
-          <div style={card}>
-            <div style={{ fontSize: 18, fontWeight: 900, marginBottom: 10 }}>Live Preview</div>
-            {!html ? (
-              <div style={{ opacity: 0.85 }}>
-                Generate HTML to preview. Your saved site HTML will show here too.
-              </div>
-            ) : (
-              <iframe
-                title="preview"
-                style={iframe}
-                sandbox="allow-same-origin allow-forms allow-popups allow-scripts"
-                srcDoc={html}
-              />
-            )}
+        {/* RIGHT */}
+        <section style={card}>
+          <div style={{ fontSize: 18, fontWeight: 900 }}>Live Preview</div>
+          <div style={{ marginTop: 10, borderRadius: 14, overflow: "hidden", border: "1px solid rgba(255,255,255,0.18)" }}>
+            <iframe
+              ref={iframeRef}
+              title="preview"
+              style={{ width: "100%", height: "78vh", background: "white" }}
+              srcDoc={html || "<html><body style='font-family:system-ui;padding:40px'>Generate HTML to preview.</body></html>"}
+              sandbox="allow-same-origin"
+            />
           </div>
-        </div>
-      </section>
+        </section>
+      </div>
     </main>
   );
 }
-
-const page: React.CSSProperties = {
-  minHeight: "100vh",
-  padding: 24,
-  color: "white",
-  background:
-    "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(124,58,237) 0%, rgb(109,40,217) 35%, rgb(91,33,182) 100%)",
-  fontFamily:
-    'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
-};
-
-const header: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 16,
-  alignItems: "flex-start",
-  marginBottom: 16,
-};
-
-const shell: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "520px 1fr",
-  gap: 16,
-};
-
-const leftCol: React.CSSProperties = { display: "grid", gap: 16 };
-const rightCol: React.CSSProperties = { display: "grid", gap: 16 };
 
 const card: React.CSSProperties = {
   background: "rgba(255,255,255,0.12)",
   border: "1px solid rgba(255,255,255,0.18)",
   borderRadius: 16,
-  padding: 16,
-  boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
-};
-
-const chipBtn: React.CSSProperties = {
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.22)",
-  background: "rgba(255,255,255,0.14)",
-  color: "white",
-  fontWeight: 900,
-  cursor: "pointer",
-};
-
-const smallBtn: React.CSSProperties = {
-  padding: "8px 10px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.22)",
-  background: "rgba(255,255,255,0.14)",
-  color: "white",
-  fontWeight: 900,
-  cursor: "pointer",
+  padding: 14,
+  boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
 };
 
 const input: React.CSSProperties = {
@@ -501,7 +440,6 @@ const input: React.CSSProperties = {
 const textarea: React.CSSProperties = {
   width: "100%",
   minHeight: 140,
-  marginTop: 10,
   padding: "12px 14px",
   borderRadius: 12,
   border: "1px solid rgba(255,255,255,0.25)",
@@ -509,6 +447,16 @@ const textarea: React.CSSProperties = {
   color: "white",
   outline: "none",
   resize: "vertical",
+};
+
+const topBtn: React.CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.25)",
+  background: "rgba(255,255,255,0.14)",
+  color: "white",
+  fontWeight: 900,
+  cursor: "pointer",
 };
 
 const primaryBtn: React.CSSProperties = {
@@ -531,13 +479,31 @@ const secondaryBtn: React.CSSProperties = {
   cursor: "pointer",
 };
 
-const errorBox: React.CSSProperties = {
-  marginTop: 12,
+const uploadBtn: React.CSSProperties = {
+  ...secondaryBtn,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+
+const smallBtn: React.CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.25)",
+  background: "rgba(255,255,255,0.14)",
+  color: "white",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
+const siteBtn: React.CSSProperties = {
+  textAlign: "left",
   padding: 12,
   borderRadius: 12,
-  background: "rgba(185, 28, 28, .25)",
-  border: "1px solid rgba(185, 28, 28, .5)",
-  whiteSpace: "pre-wrap",
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(255,255,255,0.10)",
+  color: "white",
+  cursor: "pointer",
 };
 
 const chatBox: React.CSSProperties = {
@@ -547,25 +513,10 @@ const chatBox: React.CSSProperties = {
   padding: 12,
   borderRadius: 12,
   border: "1px solid rgba(255,255,255,0.18)",
-  background: "rgba(0,0,0,0.12)",
+  background: "rgba(0,0,0,0.18)",
 };
 
-const siteRow: React.CSSProperties = {
-  padding: 10,
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.16)",
-  background: "rgba(255,255,255,0.10)",
-  color: "white",
-  cursor: "pointer",
-};
 
-const iframe: React.CSSProperties = {
-  width: "100%",
-  height: "78vh",
-  border: "1px solid rgba(255,255,255,0.2)",
-  borderRadius: 14,
-  background: "white",
-};
 
 
 
