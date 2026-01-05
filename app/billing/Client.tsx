@@ -2,19 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
-
-function getSupabase() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-  if (!url || !anon) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
-  return createClient(url, anon);
-}
+import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 export default function BillingClient() {
   const router = useRouter();
   const sp = useSearchParams();
-
   const next = useMemo(() => sp.get("next") || "/builder", [sp]);
 
   const [email, setEmail] = useState<string | null>(null);
@@ -25,7 +17,7 @@ export default function BillingClient() {
   useEffect(() => {
     const run = async () => {
       try {
-        const supabase = getSupabase();
+        const supabase = createSupabaseBrowserClient();
         const { data, error } = await supabase.auth.getSession();
 
         if (error) {
@@ -63,13 +55,11 @@ export default function BillingClient() {
         body: JSON.stringify({ next }),
       });
 
-      // IMPORTANT: if middleware ever redirects, this will be HTML, so read text first.
       const text = await res.text();
       let data: any = {};
       try {
         data = JSON.parse(text);
       } catch {
-        // show the first bit of HTML/text so you can see what happened
         throw new Error(`Checkout response not JSON (${res.status}). ${text.slice(0, 180)}`);
       }
 
@@ -184,6 +174,7 @@ const secondaryBtn: React.CSSProperties = {
   fontWeight: 900,
   cursor: "pointer",
 };
+
 
 
 
