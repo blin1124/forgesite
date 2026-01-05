@@ -1,13 +1,9 @@
+// middleware.ts
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 export const config = {
-  matcher: [
-    "/builder/:path*",
-    "/sites/:path*",
-    "/templates/:path*",
-    "/domain/:path*",
-  ],
+  matcher: ["/builder/:path*", "/sites/:path*", "/templates/:path*", "/domain/:path*"],
 };
 
 function isActive(status: string | null | undefined) {
@@ -15,22 +11,8 @@ function isActive(status: string | null | undefined) {
 }
 
 export async function middleware(req: NextRequest) {
-  const { pathname, search } = req.nextUrl;
-
-  // never block these (prevents checkout/confirm/login loops)
-  if (
-    pathname.startsWith("/api") ||
-    pathname.startsWith("/login") ||
-    pathname.startsWith("/signup") ||
-    pathname.startsWith("/billing") ||
-    pathname.startsWith("/pro/success") ||
-    pathname.startsWith("/terms") ||
-    pathname.startsWith("/privacy")
-  ) {
-    return NextResponse.next();
-  }
-
   const res = NextResponse.next();
+  const { pathname, search } = req.nextUrl;
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -49,13 +31,13 @@ export async function middleware(req: NextRequest) {
     }
   );
 
-  // 1) Auth
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
   const nextParam = encodeURIComponent(pathname + (search || ""));
 
+  // Not logged in -> login
   if (!user) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
@@ -63,14 +45,13 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // 2) Entitlement
+  // Logged in -> must have active entitlement
   const { data: ent, error } = await supabase
     .from("entitlements")
-    .select("status, current_period_end")
+    .select("status")
     .eq("user_id", user.id)
     .maybeSingle();
 
-  // if RLS blocks select or row missing -> billing
   if (error || !ent || !isActive(ent.status)) {
     const url = req.nextUrl.clone();
     url.pathname = "/billing";
@@ -80,6 +61,7 @@ export async function middleware(req: NextRequest) {
 
   return res;
 }
+
 
 
 
