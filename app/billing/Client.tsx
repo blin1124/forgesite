@@ -1,179 +1,99 @@
-"use client";
+import { NextRequest, NextResponse } from "next/server";
+import Stripe from "stripe";
+import { createClient } from "@supabase/supabase-js";
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-export default function BillingClient() {
-  const router = useRouter();
-  const sp = useSearchParams();
-  const next = useMemo(() => sp.get("next") || "/builder", [sp]);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
+  apiVersion: "2025-10-29.clover",
+});
 
-  const [email, setEmail] = useState<string | null>(null);
-  const [token, setToken] = useState<string>("");
-  const [loading, setLoading] = useState(true);
-  const [msg, setMsg] = useState<string>("");
+function getBaseUrl(req: NextRequest) {
+  // Prefer env if you have it set
+  const env =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.SITE_URL ||
+    process.env.VERCEL_URL;
 
-  useEffect(() => {
-    const run = async () => {
-      try {
-        const supabase = createSupabaseBrowserClient();
-        const { data, error } = await supabase.auth.getSession();
-
-        if (error) {
-          setEmail(null);
-          setToken("");
-        } else {
-          setEmail(data?.session?.user?.email ?? null);
-          setToken(data?.session?.access_token ?? "");
-        }
-      } catch {
-        setEmail(null);
-        setToken("");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    run();
-  }, []);
-
-  async function goCheckout() {
-    setMsg("");
-    try {
-      if (!token) {
-        router.push(`/login?next=${encodeURIComponent(`/billing?next=${encodeURIComponent(next)}`)}`);
-        return;
-      }
-
-      const res = await fetch("/api/checkout", {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ next }),
-      });
-
-      const text = await res.text();
-      let data: any = {};
-      try {
-        data = JSON.parse(text);
-      } catch {
-        throw new Error(`Checkout response not JSON (${res.status}). ${text.slice(0, 180)}`);
-      }
-
-      if (!res.ok) throw new Error(data?.error || `Checkout failed (${res.status})`);
-      if (!data?.url) throw new Error("Checkout succeeded but returned no url");
-
-      window.location.href = data.url;
-    } catch (e: any) {
-      setMsg(e?.message || "Checkout failed");
-    }
+  if (env) {
+    if (env.startsWith("http")) return env;
+    return `https://${env}`;
   }
 
-  return (
-    <main
-      style={{
-        minHeight: "100vh",
-        display: "grid",
-        placeItems: "center",
-        padding: 24,
-        color: "white",
-        background:
-          "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(124,58,237) 0%, rgb(109,40,217) 35%, rgb(91,33,182) 100%)",
-        fontFamily:
-          'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
-      }}
-    >
-      <div
-        style={{
-          width: "min(760px, 92vw)",
-          background: "rgba(255,255,255,0.12)",
-          border: "1px solid rgba(255,255,255,0.18)",
-          borderRadius: 16,
-          padding: 18,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
-        }}
-      >
-        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 900 }}>ForgeSite Billing</h1>
-        <p style={{ marginTop: 8, opacity: 0.9 }}>
-          Subscribe to access the Builder. After payment you’ll return to: <b>{next}</b>
-        </p>
-
-        <div style={{ marginTop: 12, opacity: 0.9, fontSize: 14 }}>
-          {loading ? (
-            "Checking session…"
-          ) : email ? (
-            <>
-              Signed in as <b>{email}</b>
-            </>
-          ) : (
-            "Not signed in (login first)."
-          )}
-        </div>
-
-        {msg ? (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              borderRadius: 12,
-              background: "rgba(185, 28, 28, .25)",
-              border: "1px solid rgba(185, 28, 28, .5)",
-              whiteSpace: "pre-wrap",
-            }}
-          >
-            {msg}
-          </div>
-        ) : null}
-
-        <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
-          <button onClick={goCheckout} disabled={loading} style={primaryBtn}>
-            {loading ? "Loading…" : "Subscribe"}
-          </button>
-
-          <button onClick={() => router.push("/terms")} style={secondaryBtn}>
-            Terms
-          </button>
-
-          <button onClick={() => router.push("/privacy")} style={secondaryBtn}>
-            Privacy
-          </button>
-
-          <button
-            onClick={() =>
-              router.push(`/login?next=${encodeURIComponent(`/billing?next=${encodeURIComponent(next)}`)}`)
-            }
-            style={secondaryBtn}
-          >
-            Back to login
-          </button>
-        </div>
-      </div>
-    </main>
-  );
+  // Fallback to request host
+  const host = req.headers.get("host");
+  const proto = req.headers.get("x-forwarded-proto") || "https";
+  return `${proto}://${host}`;
 }
 
-const primaryBtn: React.CSSProperties = {
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.18)",
-  background: "rgba(255,255,255,0.92)",
-  color: "rgb(85, 40, 150)",
-  fontWeight: 900,
-  cursor: "pointer",
-};
+export async function POST(req: NextRequest) {
+  try {
+    const auth = req.headers.get("authorization") || "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
 
-const secondaryBtn: React.CSSProperties = {
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.25)",
-  background: "rgba(255,255,255,0.14)",
-  color: "white",
-  fontWeight: 900,
-  cursor: "pointer",
-};
+    if (!token) {
+      return NextResponse.json({ error: "Missing auth token" }, { status: 401 });
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const next = typeof body?.next === "string" ? body.next : "/builder";
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+    const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+    if (!supabaseUrl || !supabaseAnon) {
+      return NextResponse.json(
+        { error: "Missing Supabase env vars" },
+        { status: 500 }
+      );
+    }
+
+    // Validate the JWT + get user
+    const supabase = createClient(supabaseUrl, supabaseAnon, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    });
+
+    const { data: userRes, error: userErr } = await supabase.auth.getUser();
+    if (userErr || !userRes?.user) {
+      return NextResponse.json({ error: "Invalid session" }, { status: 401 });
+    }
+
+    const user = userRes.user;
+    const priceId = process.env.STRIPE_PRICE_ID || "";
+    if (!priceId) {
+      return NextResponse.json(
+        { error: "Missing STRIPE_PRICE_ID" },
+        { status: 500 }
+      );
+    }
+
+    const base = getBaseUrl(req);
+    const successUrl = `${base}/pro/success?session_id={CHECKOUT_SESSION_ID}&next=${encodeURIComponent(
+      next
+    )}`;
+    const cancelUrl = `${base}/billing?next=${encodeURIComponent(next)}`;
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      customer_email: user.email || undefined,
+      client_reference_id: user.id,
+      metadata: {
+        user_id: user.id,
+      },
+    });
+
+    return NextResponse.json({ url: session.url }, { status: 200 });
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: err?.message || "Checkout failed" },
+      { status: 500 }
+    );
+  }
+}
+
 
 
 
