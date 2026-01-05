@@ -1,20 +1,26 @@
+// app/api/generate/route.ts
+import { NextResponse } from "next/server";
 import OpenAI from "openai";
+
+export const runtime = "nodejs";
+
+function jsonError(message: string, status = 500) {
+  return NextResponse.json({ error: message }, { status });
+}
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
-    const apiKey = body.apiKey as string | undefined;
-    const prompt = body.prompt as string | undefined;
+    const body = await req.json().catch(() => ({}));
 
-    if (!apiKey) {
-      return Response.json(
-        { error: "Missing apiKey. Paste your OpenAI key into the Builder page." },
-        { status: 400 }
-      );
+    const apiKey = String(body?.apiKey || "");
+    const prompt = String(body?.prompt || "");
+
+    if (!apiKey || !apiKey.startsWith("sk-")) {
+      return jsonError("Missing/invalid apiKey. Paste your OpenAI key into the Builder page.", 400);
     }
 
-    if (!prompt?.trim()) {
-      return Response.json({ error: "Missing prompt" }, { status: 400 });
+    if (!prompt.trim()) {
+      return jsonError("Missing prompt.", 400);
     }
 
     const client = new OpenAI({ apiKey });
@@ -40,25 +46,22 @@ export async function POST(req: Request) {
         { role: "user", content: prompt },
       ],
       temperature: 0.7,
+      max_tokens: 2000,
     });
 
     const html = resp.choices?.[0]?.message?.content?.trim() || "";
 
     if (!html.startsWith("<html")) {
-      return Response.json(
-        { error: "Model did not return raw HTML. Try again or tighten the prompt." },
-        { status: 500 }
-      );
+      return jsonError("Model did not return raw HTML. Try again or tighten the prompt.", 500);
     }
 
-    return Response.json({ html });
+    return NextResponse.json({ html });
   } catch (err: any) {
-    return Response.json(
-      { error: err?.message || "Server error in /api/generate" },
-      { status: 500 }
-    );
+    console.error("GENERATE_ROUTE_ERROR:", err);
+    return jsonError(err?.message || "Server error in /api/generate", 500);
   }
 }
+
 
 
 
