@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createServerClient } from "@supabase/ssr";
+import { cookies } from "next/headers";
 
 export const runtime = "nodejs";
 
@@ -9,28 +10,39 @@ function jsonError(message: string, status = 400) {
 
 export async function GET() {
   try {
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!supabaseUrl || !serviceKey) {
-      return jsonError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY", 500);
-    }
+    const cookieStore = await cookies();
 
-    const supabase = createClient(supabaseUrl, serviceKey, {
-      auth: { persistSession: false },
-    });
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return cookieStore.getAll();
+          },
+          setAll() {
+            // no-op for GET
+          },
+        },
+      }
+    );
+
+    const { data: userRes } = await supabase.auth.getUser();
+    const user = userRes?.user;
+
+    if (!user) return jsonError("Not signed in", 401);
 
     const { data, error } = await supabase
       .from("sites")
-      .select("id, template, content, created_at, html, prompt, name")
-      .order("created_at", { ascending: false })
-      .limit(100);
+      .select("id, template, prompt, html, created_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false });
 
     if (error) return jsonError(error.message, 500);
 
     return NextResponse.json({ sites: data || [] });
   } catch (err: any) {
-    console.error("SITES_LIST_ERROR:", err);
-    return jsonError(err?.message || "List route crashed", 500);
+    return jsonError(err?.message || "List failed", 500);
   }
 }
 
