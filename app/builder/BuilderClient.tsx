@@ -23,10 +23,21 @@ function lsSet(key: string, val: string) {
   window.localStorage.setItem(key, val);
 }
 
+// Read response safely (JSON or not)
+async function readResponse(res: Response) {
+  const text = await res.text();
+  let json: any = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = null;
+  }
+  return { text, json };
+}
+
 export default function BuilderClient() {
   const router = useRouter();
 
-  // auth display
   const [email, setEmail] = useState<string>("");
 
   // OpenAI key (local only)
@@ -36,7 +47,7 @@ export default function BuilderClient() {
   const [prompt, setPrompt] = useState<string>("");
   const [html, setHtml] = useState<string>("");
 
-  // upload state
+  // last upload
   const [fileUrl, setFileUrl] = useState<string>("");
   const [fileMime, setFileMime] = useState<string>("");
   const [fileName, setFileName] = useState<string>("");
@@ -50,6 +61,7 @@ export default function BuilderClient() {
   const [chatInput, setChatInput] = useState<string>("");
 
   const [busy, setBusy] = useState<string>("");
+  const [debug, setDebug] = useState<string>("");
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
@@ -70,20 +82,29 @@ export default function BuilderClient() {
 
   useEffect(() => {
     const run = async () => {
-      const supabase = createSupabaseBrowserClient();
-      const { data } = await supabase.auth.getSession();
-      const userEmail = data?.session?.user?.email || "";
-      setEmail(userEmail);
-
+      try {
+        const supabase = createSupabaseBrowserClient();
+        const { data } = await supabase.auth.getSession();
+        setEmail(data?.session?.user?.email || "");
+      } catch {
+        setEmail("");
+      }
       await refreshSites();
     };
     run();
   }, []);
 
   async function refreshSites() {
-    const res = await fetch("/api/sites/list");
-    const data = await res.json().catch(() => ({}));
-    setSites(Array.isArray(data?.sites) ? data.sites : []);
+    try {
+      const res = await fetch("/api/sites/list");
+      const { text, json } = await readResponse(res);
+
+      if (!res.ok) throw new Error(json?.error || `List failed (${res.status}): ${text.slice(0, 200)}`);
+
+      setSites(Array.isArray(json?.sites) ? json.sites : []);
+    } catch (e: any) {
+      setDebug(e?.message || "Failed to list sites");
+    }
   }
 
   async function loadSite(id: string) {
@@ -94,15 +115,22 @@ export default function BuilderClient() {
     setHtml(found.html || "");
     setHistory([]);
     setChatInput("");
+    setBusy("");
+    setDebug("");
   }
 
-  async function generateHtml() {
+  // ✅ accepts promptOverride so chat/upload can generate immediately with the NEW prompt
+  async function generateHtml(promptOverride?: string) {
     setBusy("");
+    setDebug("");
+
+    const usePrompt = (promptOverride ?? prompt ?? "").trim();
+
     if (!canUseAI) {
       setBusy("Paste your OpenAI key first.");
       return;
     }
-    if (!prompt.trim()) {
+    if (!usePrompt) {
       setBusy("Enter a website prompt first.");
       return;
     }
@@ -113,53 +141,69 @@ export default function BuilderClient() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ apiKey, prompt }),
+        body: JSON.stringify({ apiKey, prompt: usePrompt }),
       });
 
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || "Generate failed");
+      const { text, json } = await readResponse(res);
 
-      setHtml(String(data?.html || ""));
+      if (!res.ok) {
+        throw new Error(json?.error || `Generate failed (${res.status}): ${text.slice(0, 240)}`);
+      }
+
+      const nextHtml = String(json?.html || "");
+      if (!nextHtml.trim()) {
+        throw new Error("Generate returned empty HTML.");
+      }
+
+      setHtml(nextHtml);
       setBusy("");
     } catch (e: any) {
       setBusy(e?.message || "Generate failed");
+      setDebug(String(e?.stack || ""));
     }
   }
 
   async function saveSite() {
     setBusy("");
+    setDebug("");
+
     if (!prompt.trim()) return setBusy("Prompt is empty.");
     if (!html.trim()) return setBusy("HTML is empty. Generate first.");
 
     try {
       setBusy("Saving…");
+
       const res = await fetch("/api/sites/save", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          id: selectedId, // if null, insert new
+          id: selectedId,
           template: "html",
           prompt,
           html,
         }),
       });
 
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || "Save failed");
+      const { text, json } = await readResponse(res);
 
-      const newId = String(data?.id || "");
-      setSelectedId(newId || selectedId);
+      if (!res.ok) throw new Error(json?.error || `Save failed (${res.status}): ${text.slice(0, 240)}`);
+
+      const newId = String(json?.id || "");
+      if (newId) setSelectedId(newId);
 
       await refreshSites();
       setBusy("Saved ✅");
       setTimeout(() => setBusy(""), 1200);
     } catch (e: any) {
       setBusy(e?.message || "Save failed");
+      setDebug(String(e?.stack || ""));
     }
   }
 
   async function uploadFile(file: File) {
     setBusy("");
+    setDebug("");
+
     try {
       setBusy("Uploading…");
 
@@ -167,38 +211,43 @@ export default function BuilderClient() {
       form.append("file", file);
 
       const res = await fetch("/api/upload", { method: "POST", body: form });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || "Upload failed");
+      const { text, json } = await readResponse(res);
 
-      const u = String(data?.file_url || "");
-      const m = String(data?.file_mime || "");
-      const n = String(data?.file_name || file.name);
+      if (!res.ok) throw new Error(json?.error || `Upload failed (${res.status}): ${text.slice(0, 240)}`);
 
-      if (!u) throw new Error("Upload returned no public URL");
+      const u = String(json?.file_url || "");
+      const m = String(json?.file_mime || "");
+      const n = String(json?.file_name || file.name);
+
+      if (!u.startsWith("http")) throw new Error(`Upload returned invalid file_url: ${u || "(empty)"}`);
 
       setFileUrl(u);
       setFileMime(m);
       setFileName(n);
 
-      // ✅ inject into prompt so generator ALWAYS sees it
-      setPrompt((p) => {
-        const block = `\n\nATTACHMENT:\nNAME: ${n}\nMIME: ${m}\nURL: ${u}\n`;
-        return p.includes(u) ? p : (p + block);
-      });
+      // ✅ build the NEW prompt string synchronously
+      const block = `\n\nATTACHMENT:\nNAME: ${n}\nMIME: ${m}\nURL: ${u}\n`;
+      const nextPrompt = prompt.includes(u) ? prompt : (prompt + block);
 
-      // ✅ auto-regenerate after upload
+      setPrompt(nextPrompt);
+
+      // ✅ generate using the NEW prompt immediately (no stale state)
       setTimeout(() => {
-        generateHtml();
+        generateHtml(nextPrompt);
       }, 50);
 
-      setBusy("");
+      setBusy("Uploaded ✅ (and regenerating)");
+      setTimeout(() => setBusy(""), 1200);
     } catch (e: any) {
       setBusy(e?.message || "Upload failed");
+      setDebug(String(e?.stack || ""));
     }
   }
 
   async function runChat() {
     setBusy("");
+    setDebug("");
+
     if (!canUseAI) return setBusy("Paste your OpenAI key first.");
     if (!chatInput.trim() && !fileUrl) return setBusy("Type a message or upload a file.");
 
@@ -225,24 +274,26 @@ export default function BuilderClient() {
         }),
       });
 
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || "Chat failed");
+      const { text, json } = await readResponse(res);
 
-      const reply = String(data?.reply || "OK");
-      const prompt_update = String(data?.prompt_update || prompt);
+      if (!res.ok) throw new Error(json?.error || `Chat failed (${res.status}): ${text.slice(0, 240)}`);
+
+      const reply = String(json?.reply || "OK");
+      const prompt_update = String(json?.prompt_update || prompt);
 
       setHistory((h) => [...h, { role: "assistant", content: reply }]);
 
       setPrompt(prompt_update);
 
-      // ✅ auto-regenerate after chat changes prompt
+      // ✅ generate using the NEW prompt immediately (no stale state)
       setTimeout(() => {
-        generateHtml();
+        generateHtml(prompt_update);
       }, 50);
 
       setBusy("");
     } catch (e: any) {
       setBusy(e?.message || "Chat failed");
+      setDebug(String(e?.stack || ""));
     }
   }
 
@@ -267,7 +318,9 @@ export default function BuilderClient() {
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
         <div>
           <div style={{ fontSize: 44, fontWeight: 900, lineHeight: 1 }}>Builder</div>
-          <div style={{ opacity: 0.9 }}>Signed in as <b>{email || "unknown"}</b></div>
+          <div style={{ opacity: 0.9 }}>
+            Signed in as <b>{email || "unknown"}</b>
+          </div>
         </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -281,7 +334,6 @@ export default function BuilderClient() {
       <div style={{ display: "grid", gridTemplateColumns: "420px 1fr", gap: 14, marginTop: 14 }}>
         {/* LEFT */}
         <div style={{ display: "grid", gap: 14 }}>
-          {/* Sites */}
           <section style={card}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
@@ -296,6 +348,11 @@ export default function BuilderClient() {
                   setHtml("");
                   setHistory([]);
                   setChatInput("");
+                  setFileUrl("");
+                  setFileMime("");
+                  setFileName("");
+                  setBusy("");
+                  setDebug("");
                 }}
               >
                 + New
@@ -321,7 +378,6 @@ export default function BuilderClient() {
             </div>
           </section>
 
-          {/* OpenAI Key */}
           <section style={card}>
             <div style={{ fontSize: 18, fontWeight: 900 }}>OpenAI Key (required)</div>
             <div style={{ opacity: 0.85, fontSize: 13, marginTop: 6 }}>
@@ -336,7 +392,6 @@ export default function BuilderClient() {
             />
           </section>
 
-          {/* Prompt */}
           <section style={card}>
             <div style={{ fontSize: 18, fontWeight: 900 }}>Website Prompt</div>
             <textarea
@@ -347,7 +402,7 @@ export default function BuilderClient() {
             />
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
-              <button style={primaryBtn} onClick={generateHtml}>Generate HTML</button>
+              <button style={primaryBtn} onClick={() => generateHtml()}>Generate HTML</button>
               <button style={secondaryBtn} onClick={saveSite}>Save</button>
 
               <label style={uploadBtn}>
@@ -364,14 +419,27 @@ export default function BuilderClient() {
               </label>
             </div>
 
+            {(fileUrl || fileName) ? (
+              <div style={{ marginTop: 10, fontSize: 13, opacity: 0.95 }}>
+                <div><b>Last upload:</b> {fileName || "(no name)"} ({fileMime || "unknown"})</div>
+                <div style={{ wordBreak: "break-all" }}><b>URL:</b> {fileUrl || "(none)"}</div>
+              </div>
+            ) : null}
+
             {busy ? (
               <div style={{ marginTop: 10, padding: 10, borderRadius: 12, background: "rgba(0,0,0,0.25)" }}>
                 {busy}
               </div>
             ) : null}
+
+            {debug ? (
+              <div style={{ marginTop: 10, padding: 10, borderRadius: 12, background: "rgba(185, 28, 28, .25)", border: "1px solid rgba(185, 28, 28, .5)" }}>
+                <div style={{ fontWeight: 900 }}>Debug</div>
+                <div style={{ whiteSpace: "pre-wrap", fontSize: 12, opacity: 0.95 }}>{debug}</div>
+              </div>
+            ) : null}
           </section>
 
-          {/* Chat */}
           <section style={card}>
             <div style={{ fontSize: 18, fontWeight: 900 }}>AI Chat (updates prompt)</div>
 
@@ -407,6 +475,7 @@ export default function BuilderClient() {
           <div style={{ fontSize: 18, fontWeight: 900 }}>Live Preview</div>
           <div style={{ marginTop: 10, borderRadius: 14, overflow: "hidden", border: "1px solid rgba(255,255,255,0.18)" }}>
             <iframe
+              key={`${selectedId || "new"}-${html.length}`} // ✅ force refresh when html changes
               ref={iframeRef}
               title="preview"
               style={{ width: "100%", height: "78vh", background: "white" }}
@@ -515,6 +584,7 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
 
 
 
