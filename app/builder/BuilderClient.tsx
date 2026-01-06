@@ -14,16 +14,6 @@ type SiteRow = {
 
 type ChatMsg = { role: "user" | "assistant"; content: string };
 
-function lsGet(key: string) {
-  if (typeof window === "undefined") return "";
-  return window.localStorage.getItem(key) || "";
-}
-function lsSet(key: string, val: string) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(key, val);
-}
-
-// Read response safely (JSON or not)
 async function readResponse(res: Response) {
   const text = await res.text();
   let json: any = null;
@@ -40,23 +30,19 @@ export default function BuilderClient() {
 
   const [email, setEmail] = useState<string>("");
 
-  // OpenAI key (local only)
+  // ✅ start BLANK every time (no localStorage)
   const [apiKey, setApiKey] = useState<string>("");
-
-  // prompt + html
   const [prompt, setPrompt] = useState<string>("");
+
   const [html, setHtml] = useState<string>("");
 
-  // last upload
   const [fileUrl, setFileUrl] = useState<string>("");
   const [fileMime, setFileMime] = useState<string>("");
   const [fileName, setFileName] = useState<string>("");
 
-  // sites list
   const [sites, setSites] = useState<SiteRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // chat
   const [history, setHistory] = useState<ChatMsg[]>([]);
   const [chatInput, setChatInput] = useState<string>("");
 
@@ -66,19 +52,6 @@ export default function BuilderClient() {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
   const canUseAI = useMemo(() => apiKey.trim().startsWith("sk-"), [apiKey]);
-
-  useEffect(() => {
-    setApiKey(lsGet("forgesite_openai_key"));
-    setPrompt(lsGet("forgesite_prompt"));
-  }, []);
-
-  useEffect(() => {
-    lsSet("forgesite_openai_key", apiKey);
-  }, [apiKey]);
-
-  useEffect(() => {
-    lsSet("forgesite_prompt", prompt);
-  }, [prompt]);
 
   useEffect(() => {
     const run = async () => {
@@ -98,9 +71,7 @@ export default function BuilderClient() {
     try {
       const res = await fetch("/api/sites/list");
       const { text, json } = await readResponse(res);
-
       if (!res.ok) throw new Error(json?.error || `List failed (${res.status}): ${text.slice(0, 200)}`);
-
       setSites(Array.isArray(json?.sites) ? json.sites : []);
     } catch (e: any) {
       setDebug(e?.message || "Failed to list sites");
@@ -110,6 +81,7 @@ export default function BuilderClient() {
   async function loadSite(id: string) {
     const found = sites.find((s) => s.id === id);
     if (!found) return;
+
     setSelectedId(id);
     setPrompt(found.prompt || "");
     setHtml(found.html || "");
@@ -119,21 +91,15 @@ export default function BuilderClient() {
     setDebug("");
   }
 
-  // ✅ accepts promptOverride so chat/upload can generate immediately with the NEW prompt
+  // ✅ accepts promptOverride to avoid stale state
   async function generateHtml(promptOverride?: string) {
     setBusy("");
     setDebug("");
 
     const usePrompt = (promptOverride ?? prompt ?? "").trim();
 
-    if (!canUseAI) {
-      setBusy("Paste your OpenAI key first.");
-      return;
-    }
-    if (!usePrompt) {
-      setBusy("Enter a website prompt first.");
-      return;
-    }
+    if (!canUseAI) return setBusy("Paste your OpenAI key first.");
+    if (!usePrompt) return setBusy("Enter a website prompt first.");
 
     try {
       setBusy("Generating HTML…");
@@ -145,15 +111,10 @@ export default function BuilderClient() {
       });
 
       const { text, json } = await readResponse(res);
-
-      if (!res.ok) {
-        throw new Error(json?.error || `Generate failed (${res.status}): ${text.slice(0, 240)}`);
-      }
+      if (!res.ok) throw new Error(json?.error || `Generate failed (${res.status}): ${text.slice(0, 240)}`);
 
       const nextHtml = String(json?.html || "");
-      if (!nextHtml.trim()) {
-        throw new Error("Generate returned empty HTML.");
-      }
+      if (!nextHtml.trim()) throw new Error("Generate returned empty HTML.");
 
       setHtml(nextHtml);
       setBusy("");
@@ -185,7 +146,6 @@ export default function BuilderClient() {
       });
 
       const { text, json } = await readResponse(res);
-
       if (!res.ok) throw new Error(json?.error || `Save failed (${res.status}): ${text.slice(0, 240)}`);
 
       const newId = String(json?.id || "");
@@ -200,6 +160,9 @@ export default function BuilderClient() {
     }
   }
 
+  // ✅ supports BOTH response formats:
+  // - { file_url, file_mime, file_name }
+  // - { url, mime, name }
   async function uploadFile(file: File) {
     setBusy("");
     setDebug("");
@@ -215,9 +178,9 @@ export default function BuilderClient() {
 
       if (!res.ok) throw new Error(json?.error || `Upload failed (${res.status}): ${text.slice(0, 240)}`);
 
-      const u = String(json?.file_url || "");
-      const m = String(json?.file_mime || "");
-      const n = String(json?.file_name || file.name);
+      const u = String(json?.file_url || json?.url || "");
+      const m = String(json?.file_mime || json?.mime || file.type || "");
+      const n = String(json?.file_name || json?.name || file.name || "");
 
       if (!u.startsWith("http")) throw new Error(`Upload returned invalid file_url: ${u || "(empty)"}`);
 
@@ -225,16 +188,14 @@ export default function BuilderClient() {
       setFileMime(m);
       setFileName(n);
 
-      // ✅ build the NEW prompt string synchronously
+      // add attachment info into prompt
       const block = `\n\nATTACHMENT:\nNAME: ${n}\nMIME: ${m}\nURL: ${u}\n`;
       const nextPrompt = prompt.includes(u) ? prompt : (prompt + block);
 
       setPrompt(nextPrompt);
 
-      // ✅ generate using the NEW prompt immediately (no stale state)
-      setTimeout(() => {
-        generateHtml(nextPrompt);
-      }, 50);
+      // ✅ regenerate using the NEW prompt
+      setTimeout(() => generateHtml(nextPrompt), 50);
 
       setBusy("Uploaded ✅ (and regenerating)");
       setTimeout(() => setBusy(""), 1200);
@@ -275,7 +236,6 @@ export default function BuilderClient() {
       });
 
       const { text, json } = await readResponse(res);
-
       if (!res.ok) throw new Error(json?.error || `Chat failed (${res.status}): ${text.slice(0, 240)}`);
 
       const reply = String(json?.reply || "OK");
@@ -285,10 +245,8 @@ export default function BuilderClient() {
 
       setPrompt(prompt_update);
 
-      // ✅ generate using the NEW prompt immediately (no stale state)
-      setTimeout(() => {
-        generateHtml(prompt_update);
-      }, 50);
+      // ✅ regenerate immediately with the NEW prompt_update
+      setTimeout(() => generateHtml(prompt_update), 50);
 
       setBusy("");
     } catch (e: any) {
@@ -381,7 +339,7 @@ export default function BuilderClient() {
           <section style={card}>
             <div style={{ fontSize: 18, fontWeight: 900 }}>OpenAI Key (required)</div>
             <div style={{ opacity: 0.85, fontSize: 13, marginTop: 6 }}>
-              Stored in your browser (local). Customers paste their own key before generating.
+              This field starts blank. Customers must paste their own key before generating.
             </div>
             <input
               value={apiKey}
@@ -475,7 +433,7 @@ export default function BuilderClient() {
           <div style={{ fontSize: 18, fontWeight: 900 }}>Live Preview</div>
           <div style={{ marginTop: 10, borderRadius: 14, overflow: "hidden", border: "1px solid rgba(255,255,255,0.18)" }}>
             <iframe
-              key={`${selectedId || "new"}-${html.length}`} // ✅ force refresh when html changes
+              key={`${selectedId || "new"}-${html.length}`}
               ref={iframeRef}
               title="preview"
               style={{ width: "100%", height: "78vh", background: "white" }}
@@ -584,6 +542,7 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
 
 
 
