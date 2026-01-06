@@ -1,87 +1,65 @@
-import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import OpenAI from "openai";
 
 export const runtime = "nodejs";
 
-const MAX_BYTES = 10 * 1024 * 1024;
-
-const ALLOWED_MIME = new Set([
-  "application/pdf",
-  "image/png",
-  "image/jpeg",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // docx
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // xlsx
-  "application/msword", // doc
-  "application/vnd.ms-excel", // xls
-  "text/plain",
-  "text/markdown",
-  "text/csv",
-  "application/json",
-]);
-
-function jsonError(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status });
-}
-
-function safeFileName(name: string) {
-  return name.replace(/[^\w.\-() ]+/g, "_");
+function stripFences(s: string) {
+  // removes ```html ... ``` if the model tries it
+  return s.replace(/^```[a-zA-Z]*\s*/m, "").replace(/```$/m, "").trim();
 }
 
 export async function POST(req: Request) {
   try {
-    const contentType = req.headers.get("content-type") || "";
-    if (!contentType.includes("multipart/form-data")) {
-      return jsonError("Expected multipart/form-data", 400);
+    const body = await req.json().catch(() => ({}));
+    const apiKey = String(body?.apiKey || "");
+    const prompt = String(body?.prompt || "");
+
+    if (!apiKey || !apiKey.startsWith("sk-")) {
+      return Response.json({ error: "Missing/invalid apiKey. Paste your OpenAI key into the Builder page." }, { status: 400 });
+    }
+    if (!prompt.trim()) {
+      return Response.json({ error: "Missing prompt" }, { status: 400 });
     }
 
-    const form = await req.formData();
-    const file = form.get("file");
+    const client = new OpenAI({ apiKey });
 
-    if (!file || typeof file !== "object" || !("arrayBuffer" in file)) {
-      return jsonError("Missing file", 400);
-    }
+    const system = [
+      "You are a website generator.",
+      "Return ONLY valid HTML. No markdown. No backticks.",
+      "Must start with <html> and end with </html>.",
+      "Include <head> and <body>.",
+      "Put CSS in a single <style> inside <head>.",
+      "Make it modern, clean, and responsive.",
+      "If the prompt includes an IMAGE URL, use it exactly in <img src='...'>.",
+      "If the prompt includes a PDF URL, add a Documents section with:",
+      " - View link target=_blank",
+      " - Download link",
+      " - Embedded preview using <object> or <embed> (preferred over iframe).",
+    ].join(" ");
 
-    const f = file as File;
-    const mime = (f.type || "").toLowerCase();
-
-    if (!ALLOWED_MIME.has(mime)) return jsonError(`File type not allowed: ${mime || "unknown"}`, 400);
-    if (f.size > MAX_BYTES) return jsonError(`File too large. Max ${MAX_BYTES / (1024 * 1024)}MB`, 400);
-
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!supabaseUrl || !serviceKey) {
-      return jsonError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY", 500);
-    }
-
-    const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
-
-    const bucket = process.env.SUPABASE_UPLOADS_BUCKET || "uploads";
-
-    const clean = safeFileName(f.name);
-    const ext = clean.includes(".") ? clean.split(".").pop() : "bin";
-    const path = `builder/${crypto.randomUUID()}.${ext}`;
-
-    const bytes = new Uint8Array(await f.arrayBuffer());
-
-    const { error: upErr } = await supabase.storage.from(bucket).upload(path, bytes, {
-      contentType: mime,
-      upsert: false,
+    const resp = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.6,
+      max_tokens: 1500,
     });
 
-    if (upErr) return jsonError(`Upload failed: ${upErr.message}`, 500);
+    const raw = resp.choices?.[0]?.message?.content || "";
+    const html = stripFences(raw);
 
-    const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+    if (!html.startsWith("<html") || !html.endsWith("</html>")) {
+      return Response.json(
+        { error: "Model did not return raw <html>...</html>. Try Generate again (or tighten prompt).", raw: raw.slice(0, 400) },
+        { status: 500 }
+      );
+    }
 
-    return NextResponse.json({
-      url: data.publicUrl,
-      path,
-      mime,
-      name: f.name,
-      size: f.size,
-    });
+    return Response.json({ html });
   } catch (err: any) {
-    console.error("UPLOAD_ROUTE_ERROR:", err);
-    return jsonError(err?.message || "Upload route crashed", 500);
+    console.error("GENERATE_ERROR:", err);
+    return Response.json({ error: err?.message || "Server error in /api/generate" }, { status: 500 });
   }
 }
 
