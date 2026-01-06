@@ -190,7 +190,7 @@ export default function BuilderClient() {
 
       // add attachment info into prompt
       const block = `\n\nATTACHMENT:\nNAME: ${n}\nMIME: ${m}\nURL: ${u}\n`;
-      const nextPrompt = prompt.includes(u) ? prompt : (prompt + block);
+      const nextPrompt = prompt.includes(u) ? prompt : prompt + block;
 
       setPrompt(nextPrompt);
 
@@ -282,10 +282,18 @@ export default function BuilderClient() {
         </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button style={topBtn} onClick={() => router.push("/sites")}>My Sites</button>
-          <button style={topBtn} onClick={() => router.push("/templates")}>Templates</button>
-          <button style={topBtn} onClick={() => router.push("/billing")}>Billing</button>
-          <button style={topBtn} onClick={logout}>Log out</button>
+          <button style={topBtn} onClick={() => router.push("/sites")}>
+            My Sites
+          </button>
+          <button style={topBtn} onClick={() => router.push("/templates")}>
+            Templates
+          </button>
+          <button style={topBtn} onClick={() => router.push("/billing")}>
+            Billing
+          </button>
+          <button style={topBtn} onClick={logout}>
+            Log out
+          </button>
         </div>
       </header>
 
@@ -328,9 +336,7 @@ export default function BuilderClient() {
                   }}
                 >
                   <div style={{ fontWeight: 900 }}>{(s.template || "html") + " • " + s.id.slice(0, 7)}</div>
-                  <div style={{ opacity: 0.85, fontSize: 12 }}>
-                    {new Date(s.created_at).toLocaleString()}
-                  </div>
+                  <div style={{ opacity: 0.85, fontSize: 12 }}>{new Date(s.created_at).toLocaleString()}</div>
                 </button>
               ))}
             </div>
@@ -360,8 +366,12 @@ export default function BuilderClient() {
             />
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
-              <button style={primaryBtn} onClick={() => generateHtml()}>Generate HTML</button>
-              <button style={secondaryBtn} onClick={saveSite}>Save</button>
+              <button style={primaryBtn} onClick={() => generateHtml()}>
+                Generate HTML
+              </button>
+              <button style={secondaryBtn} onClick={saveSite}>
+                Save
+              </button>
 
               <label style={uploadBtn}>
                 Upload PDF/PNG/DOCX/XLSX
@@ -377,10 +387,14 @@ export default function BuilderClient() {
               </label>
             </div>
 
-            {(fileUrl || fileName) ? (
+            {fileUrl || fileName ? (
               <div style={{ marginTop: 10, fontSize: 13, opacity: 0.95 }}>
-                <div><b>Last upload:</b> {fileName || "(no name)"} ({fileMime || "unknown"})</div>
-                <div style={{ wordBreak: "break-all" }}><b>URL:</b> {fileUrl || "(none)"}</div>
+                <div>
+                  <b>Last upload:</b> {fileName || "(no name)"} ({fileMime || "unknown"})
+                </div>
+                <div style={{ wordBreak: "break-all" }}>
+                  <b>URL:</b> {fileUrl || "(none)"}
+                </div>
               </div>
             ) : null}
 
@@ -391,7 +405,15 @@ export default function BuilderClient() {
             ) : null}
 
             {debug ? (
-              <div style={{ marginTop: 10, padding: 10, borderRadius: 12, background: "rgba(185, 28, 28, .25)", border: "1px solid rgba(185, 28, 28, .5)" }}>
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: 10,
+                  borderRadius: 12,
+                  background: "rgba(185, 28, 28, .25)",
+                  border: "1px solid rgba(185, 28, 28, .5)",
+                }}
+              >
                 <div style={{ fontWeight: 900 }}>Debug</div>
                 <div style={{ whiteSpace: "pre-wrap", fontSize: 12, opacity: 0.95 }}>{debug}</div>
               </div>
@@ -423,7 +445,61 @@ export default function BuilderClient() {
                 placeholder="Tell the AI what to change…"
                 style={{ ...input, flex: 1 }}
               />
-              <button style={primaryBtn} onClick={runChat}>Send</button>
+              <button style={primaryBtn} onClick={runChat}>
+                Send
+              </button>
+            </div>
+          </section>
+
+          {/* ✅ NEW: Custom Domain CTA card near the bottom by chat */}
+          <section style={card}>
+            <div style={{ fontSize: 18, fontWeight: 900 }}>Custom domain (final step)</div>
+            <div style={{ opacity: 0.9, fontSize: 13, marginTop: 6, lineHeight: 1.35 }}>
+              When your customer is done building their website, they can connect their own domain (like{" "}
+              <b>yourbusiness.com</b>). Click below to connect it inside ForgeSite.
+            </div>
+
+            <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+              <div style={stepRow}>
+                <b>Step 1:</b> Buy a domain from GoDaddy, IONOS, Namecheap, etc.
+              </div>
+              <div style={stepRow}>
+                <b>Step 2:</b> Enter it in ForgeSite and we’ll show the DNS records to add.
+              </div>
+              <div style={stepRow}>
+                <b>Step 3:</b> DNS can take a little while to update (often minutes, sometimes longer).
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+              <a
+                href="https://www.godaddy.com/domains"
+                target="_blank"
+                rel="noreferrer noopener"
+                style={linkBtn}
+              >
+                Buy on GoDaddy →
+              </a>
+              <a href="https://www.ionos.com/domains" target="_blank" rel="noreferrer noopener" style={linkBtn}>
+                Buy on IONOS →
+              </a>
+              <a
+                href="https://www.namecheap.com/domains/"
+                target="_blank"
+                rel="noreferrer noopener"
+                style={linkBtn}
+              >
+                Buy on Namecheap →
+              </a>
+
+              <button
+                type="button"
+                onClick={() => router.push("/domain")}
+                style={primaryBtn}
+                title="Connect your domain inside ForgeSite"
+              >
+                Connect Custom Domain →
+              </button>
             </div>
           </section>
         </div>
@@ -431,13 +507,22 @@ export default function BuilderClient() {
         {/* RIGHT */}
         <section style={card}>
           <div style={{ fontSize: 18, fontWeight: 900 }}>Live Preview</div>
-          <div style={{ marginTop: 10, borderRadius: 14, overflow: "hidden", border: "1px solid rgba(255,255,255,0.18)" }}>
+          <div
+            style={{
+              marginTop: 10,
+              borderRadius: 14,
+              overflow: "hidden",
+              border: "1px solid rgba(255,255,255,0.18)",
+            }}
+          >
             <iframe
               key={`${selectedId || "new"}-${html.length}`}
               ref={iframeRef}
               title="preview"
               style={{ width: "100%", height: "78vh", background: "white" }}
-              srcDoc={html || "<html><body style='font-family:system-ui;padding:40px'>Generate HTML to preview.</body></html>"}
+              srcDoc={
+                html || "<html><body style='font-family:system-ui;padding:40px'>Generate HTML to preview.</body></html>"
+              }
               sandbox="allow-same-origin"
             />
           </div>
@@ -543,12 +628,25 @@ const chatBox: React.CSSProperties = {
   background: "rgba(0,0,0,0.18)",
 };
 
+const stepRow: React.CSSProperties = {
+  background: "rgba(255,255,255,0.08)",
+  border: "1px solid rgba(255,255,255,0.14)",
+  borderRadius: 12,
+  padding: "10px 12px",
+  lineHeight: 1.25,
+};
 
-
-
-
-
-
-
-
+const linkBtn: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "10px 12px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.22)",
+  background: "rgba(255,255,255,0.10)",
+  color: "white",
+  fontWeight: 900,
+  textDecoration: "none",
+  cursor: "pointer",
+};
 
