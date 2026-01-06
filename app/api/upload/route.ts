@@ -9,10 +9,12 @@ const ALLOWED_MIME = new Set([
   "application/pdf",
   "image/png",
   "image/jpeg",
+  "image/jpg",
+  "image/webp",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // docx
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // xlsx
-  "application/msword", // doc
-  "application/vnd.ms-excel", // xls
+  "application/msword",
+  "application/vnd.ms-excel",
   "text/plain",
   "text/markdown",
   "text/csv",
@@ -29,16 +31,18 @@ function safeFileName(name: string) {
 
 export async function POST(req: Request) {
   try {
-    const contentType = req.headers.get("content-type") || "";
-    if (!contentType.includes("multipart/form-data")) {
-      return jsonError("Expected multipart/form-data", 400);
+    // ✅ Don't trust content-type checks—just attempt formData
+    let form: FormData;
+    try {
+      form = await req.formData();
+    } catch {
+      return jsonError("Upload must be sent as multipart/form-data (FormData).", 400);
     }
 
-    const form = await req.formData();
     const file = form.get("file");
 
     if (!file || typeof file !== "object" || !("arrayBuffer" in file)) {
-      return jsonError("Missing file", 400);
+      return jsonError('Missing file. Field name must be "file".', 400);
     }
 
     const f = file as File;
@@ -54,7 +58,6 @@ export async function POST(req: Request) {
     }
 
     const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
-
     const bucket = process.env.SUPABASE_UPLOADS_BUCKET || "uploads";
 
     const clean = safeFileName(f.name);
@@ -72,11 +75,21 @@ export async function POST(req: Request) {
 
     const { data } = supabase.storage.from(bucket).getPublicUrl(path);
 
+    const publicUrl = data?.publicUrl || "";
+    if (!publicUrl.startsWith("http")) return jsonError("Upload succeeded but no public URL returned.", 500);
+
+    // ✅ Return BOTH response shapes so client never breaks again
     return NextResponse.json({
-      url: data.publicUrl,
-      path,
+      url: publicUrl,
+      file_url: publicUrl,
+
       mime,
+      file_mime: mime,
+
       name: f.name,
+      file_name: f.name,
+
+      path,
       size: f.size,
     });
   } catch (err: any) {
@@ -84,5 +97,6 @@ export async function POST(req: Request) {
     return jsonError(err?.message || "Upload route crashed", 500);
   }
 }
+
 
 
