@@ -42,23 +42,28 @@ async function addDomainToVercel(domain: string) {
   const token = process.env.VERCEL_TOKEN!;
   const projectId = process.env.VERCEL_PROJECT_ID!;
 
-  const res = await fetch(
-    `https://api.vercel.com/v10/projects/${projectId}/domains`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ name: domain }),
-    }
-  );
+  if (!token) throw new Error("Missing VERCEL_TOKEN");
+  if (!projectId) throw new Error("Missing VERCEL_PROJECT_ID");
+
+  const res = await fetch(`https://api.vercel.com/v10/projects/${projectId}/domains`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ name: domain }),
+  });
 
   const text = await res.text();
-  const json = JSON.parse(text);
+  let json: any = {};
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = { raw: text };
+  }
 
   if (!res.ok) {
-    throw new Error(json?.error?.message || "Vercel domain add failed");
+    throw new Error(json?.error?.message || json?.message || "Vercel domain add failed");
   }
 
   return json;
@@ -66,23 +71,19 @@ async function addDomainToVercel(domain: string) {
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    const body = await req.json().catch(() => ({}));
     const rawDomain = String(body.domain || "");
 
     const domain = normalizeDomain(rawDomain);
-    if (!isValidDomain(domain)) {
-      return jsonError("Invalid domain name");
-    }
+    if (!isValidDomain(domain)) return jsonError("Invalid domain name");
 
     const user_id = await getUserId();
 
-    const admin = createClient(
-      process.env.SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      { auth: { persistSession: false } }
-    );
+    const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
+      auth: { persistSession: false },
+    });
 
-    // Save immediately
+    // Create/update row first
     await admin.from("custom_domains").upsert({
       user_id,
       domain,
@@ -93,21 +94,22 @@ export async function POST(req: Request) {
     // Add to Vercel
     const vercelPayload = await addDomainToVercel(domain);
 
-    // Update status
-    await admin.from("custom_domains").update({
-      status: "added",
-      vercel_payload: vercelPayload,
-      updated_at: new Date().toISOString(),
-    }).eq("user_id", user_id).eq("domain", domain);
+    // Mark as added
+    await admin
+      .from("custom_domains")
+      .update({
+        status: "added",
+        vercel_payload: vercelPayload,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("user_id", user_id)
+      .eq("domain", domain);
 
-    return NextResponse.json({
-      ok: true,
-      domain,
-      status: "added",
-    });
+    return NextResponse.json({ ok: true, domain, status: "added" });
   } catch (err: any) {
-    return jsonError(err.message || "Domain connect failed", 500);
+    return jsonError(err?.message || "Domain connect failed", 500);
   }
 }
+
 
 
