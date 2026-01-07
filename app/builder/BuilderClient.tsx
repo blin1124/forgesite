@@ -283,18 +283,10 @@ export default function BuilderClient() {
         </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button style={topBtn} onClick={() => router.push("/sites")}>
-            My Sites
-          </button>
-          <button style={topBtn} onClick={() => router.push("/templates")}>
-            Templates
-          </button>
-          <button style={topBtn} onClick={() => router.push("/billing")}>
-            Billing
-          </button>
-          <button style={topBtn} onClick={logout}>
-            Log out
-          </button>
+          <button style={topBtn} onClick={() => router.push("/sites")}>My Sites</button>
+          <button style={topBtn} onClick={() => router.push("/templates")}>Templates</button>
+          <button style={topBtn} onClick={() => router.push("/billing")}>Billing</button>
+          <button style={topBtn} onClick={logout}>Log out</button>
         </div>
       </header>
 
@@ -337,7 +329,9 @@ export default function BuilderClient() {
                   }}
                 >
                   <div style={{ fontWeight: 900 }}>{(s.template || "html") + " • " + s.id.slice(0, 7)}</div>
-                  <div style={{ opacity: 0.85, fontSize: 12 }}>{new Date(s.created_at).toLocaleString()}</div>
+                  <div style={{ opacity: 0.85, fontSize: 12 }}>
+                    {new Date(s.created_at).toLocaleString()}
+                  </div>
                 </button>
               ))}
             </div>
@@ -367,12 +361,8 @@ export default function BuilderClient() {
             />
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
-              <button style={primaryBtn} onClick={() => generateHtml()}>
-                Generate HTML
-              </button>
-              <button style={secondaryBtn} onClick={saveSite}>
-                Save
-              </button>
+              <button style={primaryBtn} onClick={() => generateHtml()}>Generate HTML</button>
+              <button style={secondaryBtn} onClick={saveSite}>Save</button>
 
               <label style={uploadBtn}>
                 Upload PDF/PNG/DOCX/XLSX
@@ -390,12 +380,8 @@ export default function BuilderClient() {
 
             {(fileUrl || fileName) ? (
               <div style={{ marginTop: 10, fontSize: 13, opacity: 0.95 }}>
-                <div>
-                  <b>Last upload:</b> {fileName || "(no name)"} ({fileMime || "unknown"})
-                </div>
-                <div style={{ wordBreak: "break-all" }}>
-                  <b>URL:</b> {fileUrl || "(none)"}
-                </div>
+                <div><b>Last upload:</b> {fileName || "(no name)"} ({fileMime || "unknown"})</div>
+                <div style={{ wordBreak: "break-all" }}><b>URL:</b> {fileUrl || "(none)"}</div>
               </div>
             ) : null}
 
@@ -406,15 +392,7 @@ export default function BuilderClient() {
             ) : null}
 
             {debug ? (
-              <div
-                style={{
-                  marginTop: 10,
-                  padding: 10,
-                  borderRadius: 12,
-                  background: "rgba(185, 28, 28, .25)",
-                  border: "1px solid rgba(185, 28, 28, .5)",
-                }}
-              >
+              <div style={{ marginTop: 10, padding: 10, borderRadius: 12, background: "rgba(185, 28, 28, .25)", border: "1px solid rgba(185, 28, 28, .5)" }}>
                 <div style={{ fontWeight: 900 }}>Debug</div>
                 <div style={{ whiteSpace: "pre-wrap", fontSize: 12, opacity: 0.95 }}>{debug}</div>
               </div>
@@ -446,12 +424,10 @@ export default function BuilderClient() {
                 placeholder="Tell the AI what to change…"
                 style={{ ...input, flex: 1 }}
               />
-              <button style={primaryBtn} onClick={runChat}>
-                Send
-              </button>
+              <button style={primaryBtn} onClick={runChat}>Send</button>
             </div>
 
-            {/* ✅ NEW: Domain button near the bottom next to chat */}
+            {/* ✅ BUTTON near the bottom next to chat */}
             <div
               style={{
                 marginTop: 12,
@@ -481,14 +457,7 @@ export default function BuilderClient() {
         {/* RIGHT */}
         <section style={card}>
           <div style={{ fontSize: 18, fontWeight: 900 }}>Live Preview</div>
-          <div
-            style={{
-              marginTop: 10,
-              borderRadius: 14,
-              overflow: "hidden",
-              border: "1px solid rgba(255,255,255,0.18)",
-            }}
-          >
+          <div style={{ marginTop: 10, borderRadius: 14, overflow: "hidden", border: "1px solid rgba(255,255,255,0.18)" }}>
             <iframe
               key={`${selectedId || "new"}-${html.length}`}
               ref={iframeRef}
@@ -599,4 +568,5 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
 
