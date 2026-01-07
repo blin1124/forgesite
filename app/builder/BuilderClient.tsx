@@ -65,6 +65,7 @@ export default function BuilderClient() {
       await refreshSites();
     };
     run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function refreshSites() {
@@ -387,7 +388,7 @@ export default function BuilderClient() {
               </label>
             </div>
 
-            {fileUrl || fileName ? (
+            {(fileUrl || fileName) ? (
               <div style={{ marginTop: 10, fontSize: 13, opacity: 0.95 }}>
                 <div>
                   <b>Last upload:</b> {fileName || "(no name)"} ({fileMime || "unknown"})
@@ -449,56 +450,29 @@ export default function BuilderClient() {
                 Send
               </button>
             </div>
-          </section>
 
-          {/* ✅ NEW: Custom Domain CTA card near the bottom by chat */}
-          <section style={card}>
-            <div style={{ fontSize: 18, fontWeight: 900 }}>Custom domain (final step)</div>
-            <div style={{ opacity: 0.9, fontSize: 13, marginTop: 6, lineHeight: 1.35 }}>
-              When your customer is done building their website, they can connect their own domain (like{" "}
-              <b>yourbusiness.com</b>). Click below to connect it inside ForgeSite.
-            </div>
-
-            <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
-              <div style={stepRow}>
-                <b>Step 1:</b> Buy a domain from GoDaddy, IONOS, Namecheap, etc.
+            {/* ✅ NEW: Domain button near the bottom next to chat */}
+            <div
+              style={{
+                marginTop: 12,
+                padding: 12,
+                borderRadius: 14,
+                border: "1px solid rgba(255,255,255,0.18)",
+                background: "rgba(0,0,0,0.14)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 900, fontSize: 14 }}>Ready to connect your domain?</div>
+                <div style={{ opacity: 0.85, fontSize: 12 }}>
+                  When the customer is done building, they can connect their domain in one step.
+                </div>
               </div>
-              <div style={stepRow}>
-                <b>Step 2:</b> Enter it in ForgeSite and we’ll show the DNS records to add.
-              </div>
-              <div style={stepRow}>
-                <b>Step 3:</b> DNS can take a little while to update (often minutes, sometimes longer).
-              </div>
-            </div>
-
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
-              <a
-                href="https://www.godaddy.com/domains"
-                target="_blank"
-                rel="noreferrer noopener"
-                style={linkBtn}
-              >
-                Buy on GoDaddy →
-              </a>
-              <a href="https://www.ionos.com/domains" target="_blank" rel="noreferrer noopener" style={linkBtn}>
-                Buy on IONOS →
-              </a>
-              <a
-                href="https://www.namecheap.com/domains/"
-                target="_blank"
-                rel="noreferrer noopener"
-                style={linkBtn}
-              >
-                Buy on Namecheap →
-              </a>
-
-              <button
-                type="button"
-                onClick={() => router.push("/domain")}
-                style={primaryBtn}
-                title="Connect your domain inside ForgeSite"
-              >
-                Connect Custom Domain →
+              <button style={secondaryBtn} onClick={() => router.push("/domain")}>
+                Connect Domain →
               </button>
             </div>
           </section>
@@ -520,9 +494,7 @@ export default function BuilderClient() {
               ref={iframeRef}
               title="preview"
               style={{ width: "100%", height: "78vh", background: "white" }}
-              srcDoc={
-                html || "<html><body style='font-family:system-ui;padding:40px'>Generate HTML to preview.</body></html>"
-              }
+              srcDoc={html || "<html><body style='font-family:system-ui;padding:40px'>Generate HTML to preview.</body></html>"}
               sandbox="allow-same-origin"
             />
           </div>
@@ -626,27 +598,5 @@ const chatBox: React.CSSProperties = {
   borderRadius: 12,
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
-};
-
-const stepRow: React.CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
-  border: "1px solid rgba(255,255,255,0.14)",
-  borderRadius: 12,
-  padding: "10px 12px",
-  lineHeight: 1.25,
-};
-
-const linkBtn: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.22)",
-  background: "rgba(255,255,255,0.10)",
-  color: "white",
-  fontWeight: 900,
-  textDecoration: "none",
-  cursor: "pointer",
 };
 
