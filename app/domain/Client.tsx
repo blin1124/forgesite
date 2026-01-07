@@ -8,8 +8,13 @@ export default function DomainClient() {
   const router = useRouter();
 
   const [email, setEmail] = useState("");
-  const [domain, setDomain] = useState("");
-  const [savedDomain, setSavedDomain] = useState("");
+
+  const [apexDomain, setApexDomain] = useState("");
+  const [wwwDomain, setWwwDomain] = useState("");
+
+  const [savedApex, setSavedApex] = useState("");
+  const [savedWww, setSavedWww] = useState("");
+
   const [msg, setMsg] = useState("");
 
   useEffect(() => {
@@ -22,45 +27,86 @@ export default function DomainClient() {
         setEmail("");
       }
 
-      // local-only (won’t touch DB/RLS; won’t break anything)
+      // local-only for now (won’t touch DB/RLS; won’t break anything)
       try {
-        const d = localStorage.getItem("forgesite:last_domain") || "";
-        if (d) {
-          setDomain(d);
-          setSavedDomain(d);
-        }
+        const a = localStorage.getItem("forgesite:customer_domain_apex") || "";
+        const w = localStorage.getItem("forgesite:customer_domain_www") || "";
+        if (a) setApexDomain(a);
+        if (w) setWwwDomain(w);
+        setSavedApex(a);
+        setSavedWww(w);
       } catch {}
     };
     run();
   }, []);
 
-  const cleanDomain = useMemo(() => domain.trim().toLowerCase(), [domain]);
+  const apexClean = useMemo(() => cleanDomain(apexDomain), [apexDomain]);
+  const wwwClean = useMemo(() => cleanDomain(wwwDomain), [wwwDomain]);
+
+  function cleanDomain(d: string) {
+    return String(d || "")
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\//, "")
+      .replace(/\/.*$/, "")
+      .replace(/\s+/g, "");
+  }
 
   function isValidDomain(d: string) {
     if (!d) return false;
-    if (d.includes("http://") || d.includes("https://")) return false;
-    if (d.includes("/") || d.includes(" ")) return false;
+    if (d.includes("/")) return false;
+    if (d.includes(" ")) return false;
     if (!d.includes(".")) return false;
     return /^[a-z0-9.-]+$/.test(d);
   }
 
+  function setDefaultWwwFromApex(a: string) {
+    const x = cleanDomain(a);
+    if (!isValidDomain(x)) return;
+    // if they typed www already, keep it
+    if (wwwDomain.trim()) return;
+    setWwwDomain(`www.${x}`);
+  }
+
   function saveLocal() {
     setMsg("");
-    const d = cleanDomain;
 
-    if (!isValidDomain(d)) {
+    const a = apexClean;
+    const w = wwwClean;
+
+    if (!isValidDomain(a)) {
       setMsg("Please enter a domain like: yourbusiness.com (no https://)");
       return;
     }
 
+    // www is optional but recommended
+    const wFinal = w && isValidDomain(w) ? w : `www.${a}`;
+
     try {
-      localStorage.setItem("forgesite:last_domain", d);
-      setSavedDomain(d);
-      setMsg("Saved ✅ (local)");
-      setTimeout(() => setMsg(""), 1200);
+      localStorage.setItem("forgesite:customer_domain_apex", a);
+      localStorage.setItem("forgesite:customer_domain_www", wFinal);
+
+      setSavedApex(a);
+      setSavedWww(wFinal);
+
+      setMsg("Saved ✅");
+      setTimeout(() => setMsg(""), 1400);
     } catch {
-      setMsg("Could not save locally (browser blocked storage).");
+      setMsg("Could not save (browser blocked storage).");
     }
+  }
+
+  function markDone() {
+    setMsg("");
+    if (!savedApex) {
+      setMsg("Save your domain first.");
+      return;
+    }
+
+    // Placeholder for later:
+    // - trigger verification check
+    // - show “Connected ✅” once verified
+    setMsg("Perfect — next we’ll verify your DNS automatically (coming next). ✅");
   }
 
   return (
@@ -91,27 +137,40 @@ export default function DomainClient() {
 
       <div style={{ marginTop: 14, maxWidth: 980 }}>
         <section style={card}>
-          <div style={{ fontSize: 22, fontWeight: 900 }}>Custom domain (what customers expect)</div>
-          <div style={{ opacity: 0.9, marginTop: 6, lineHeight: 1.35 }}>
-            When you finish designing your site, you can connect your own domain (like <b>yourbusiness.com</b>). You’ll
-            buy the domain from a registrar, then connect it inside ForgeSite.
+          <div style={{ fontSize: 22, fontWeight: 900 }}>Connect your custom domain</div>
+          <div style={{ opacity: 0.92, marginTop: 6, lineHeight: 1.4 }}>
+            When you’re done building your website, you can connect a domain you own (like <b>yourbusiness.com</b>) so
+            visitors can find your site easily.
           </div>
 
-          <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+          <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
             <div style={{ fontWeight: 900 }}>Your domain</div>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <input
+                  value={apexDomain}
+                  onChange={(e) => setApexDomain(e.target.value)}
+                  onBlur={() => setDefaultWwwFromApex(apexDomain)}
+                  placeholder="yourbusiness.com"
+                  style={{ ...input, minWidth: 320, flex: 1 }}
+                />
+                <button style={primaryBtn} onClick={saveLocal}>Save</button>
+              </div>
+
               <input
-                value={domain}
-                onChange={(e) => setDomain(e.target.value)}
-                placeholder="yourbusiness.com"
-                style={{ ...input, minWidth: 320, flex: 1 }}
+                value={wwwDomain}
+                onChange={(e) => setWwwDomain(e.target.value)}
+                placeholder="www.yourbusiness.com (recommended)"
+                style={{ ...input, minWidth: 320 }}
               />
-              <button style={primaryBtn} onClick={saveLocal}>Save</button>
             </div>
 
-            {savedDomain ? (
-              <div style={{ opacity: 0.9, fontSize: 13 }}>
-                Saved domain: <b>{savedDomain}</b>
+            {(savedApex || savedWww) ? (
+              <div style={{ opacity: 0.92, fontSize: 13, lineHeight: 1.35 }}>
+                <div>Saved:</div>
+                <div><b>Apex:</b> {savedApex || "(not saved)"}</div>
+                <div><b>WWW:</b> {savedWww || "(not saved)"}</div>
               </div>
             ) : null}
 
@@ -122,32 +181,44 @@ export default function DomainClient() {
             ) : null}
           </div>
 
-          <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
-            <div style={{ fontWeight: 900 }}>Steps</div>
+          <div style={{ marginTop: 18, display: "grid", gap: 12 }}>
+            <div style={{ fontWeight: 900 }}>What happens next</div>
 
-            <div style={{ opacity: 0.95, lineHeight: 1.45 }}>
-              <div><b>Step 1:</b> Buy a domain from GoDaddy, IONOS, Namecheap, etc.</div>
-              <div><b>Step 2:</b> In <b>Vercel → Project → Settings → Domains</b>, add your domain.</div>
-              <div><b>Step 3:</b> Vercel will show the exact DNS records you must add (A/CNAME). Copy them into your registrar.</div>
-              <div><b>Step 4:</b> DNS can take a bit to update (often minutes, sometimes longer).</div>
+            <div style={{ opacity: 0.95, lineHeight: 1.5 }}>
+              <div><b>Step 1:</b> Buy a domain from a registrar (GoDaddy, IONOS, Namecheap, etc.).</div>
+              <div><b>Step 2:</b> In your registrar’s DNS settings, you’ll add the records ForgeSite gives you.</div>
+              <div><b>Step 3:</b> Once the DNS records are saved, ForgeSite will verify the connection automatically.</div>
+              <div style={{ marginTop: 6, opacity: 0.9 }}>
+                DNS updates can take a bit (often minutes, sometimes longer).
+              </div>
             </div>
 
             <div
               style={{
-                marginTop: 8,
                 padding: 12,
                 borderRadius: 14,
                 border: "1px solid rgba(255,255,255,0.18)",
                 background: "rgba(0,0,0,0.16)",
               }}
             >
-              <div style={{ fontWeight: 900, marginBottom: 6 }}>Important</div>
+              <div style={{ fontWeight: 900, marginBottom: 6 }}>Your DNS records (coming next)</div>
               <div style={{ opacity: 0.92, fontSize: 13, lineHeight: 1.35 }}>
-                Don’t guess the Apex IP. Use the one Vercel shows under your project’s Domain settings.
+                Next we’ll display the exact DNS records right here (A/CNAME), and verify automatically.
+                For now, this page is the customer flow + UI.
               </div>
             </div>
 
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button style={secondaryBtn} onClick={markDone}>
+                I’ve added my DNS records →
+              </button>
+
+              <button style={secondaryBtn} onClick={() => router.push("/builder")}>
+                Back to Builder
+              </button>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
               <a href="https://www.godaddy.com/domains" target="_blank" rel="noreferrer" style={linkBtn}>
                 Buy on GoDaddy →
               </a>
@@ -206,6 +277,16 @@ const primaryBtn: React.CSSProperties = {
   cursor: "pointer",
 };
 
+const secondaryBtn: React.CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.25)",
+  background: "rgba(255,255,255,0.14)",
+  color: "white",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
 const linkBtn: React.CSSProperties = {
   padding: "12px 14px",
   borderRadius: 12,
@@ -219,6 +300,8 @@ const linkBtn: React.CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
 };
+
+
 
 
 
