@@ -22,7 +22,7 @@ export default function DomainClient() {
         setEmail("");
       }
 
-      // local-only for now (won’t break DB/RLS). Later we’ll save to Supabase.
+      // local-only (won’t touch DB/RLS; won’t break anything)
       try {
         const d = localStorage.getItem("forgesite:last_domain") || "";
         if (d) {
@@ -37,7 +37,6 @@ export default function DomainClient() {
   const cleanDomain = useMemo(() => domain.trim().toLowerCase(), [domain]);
 
   function isValidDomain(d: string) {
-    // simple validation: no protocol, no slashes, has a dot, reasonable chars
     if (!d) return false;
     if (d.includes("http://") || d.includes("https://")) return false;
     if (d.includes("/") || d.includes(" ")) return false;
@@ -85,12 +84,8 @@ export default function DomainClient() {
         </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button style={topBtn} onClick={() => router.push("/builder")}>
-            ← Back to Builder
-          </button>
-          <button style={topBtn} onClick={() => router.push("/billing")}>
-            Billing
-          </button>
+          <button style={topBtn} onClick={() => router.push("/builder")}>← Back to Builder</button>
+          <button style={topBtn} onClick={() => router.push("/billing")}>Billing</button>
         </div>
       </header>
 
@@ -111,9 +106,7 @@ export default function DomainClient() {
                 placeholder="yourbusiness.com"
                 style={{ ...input, minWidth: 320, flex: 1 }}
               />
-              <button style={primaryBtn} onClick={saveLocal}>
-                Save
-              </button>
+              <button style={primaryBtn} onClick={saveLocal}>Save</button>
             </div>
 
             {savedDomain ? (
@@ -123,7 +116,9 @@ export default function DomainClient() {
             ) : null}
 
             {msg ? (
-              <div style={{ marginTop: 8, padding: 10, borderRadius: 12, background: "rgba(0,0,0,0.25)" }}>{msg}</div>
+              <div style={{ marginTop: 8, padding: 10, borderRadius: 12, background: "rgba(0,0,0,0.25)" }}>
+                {msg}
+              </div>
             ) : null}
           </div>
 
@@ -131,19 +126,10 @@ export default function DomainClient() {
             <div style={{ fontWeight: 900 }}>Steps</div>
 
             <div style={{ opacity: 0.95, lineHeight: 1.45 }}>
-              <div>
-                <b>Step 1:</b> Buy a domain from GoDaddy, IONOS, Namecheap, etc.
-              </div>
-              <div>
-                <b>Step 2:</b> In <b>Vercel → Project → Settings → Domains</b>, add your domain.
-              </div>
-              <div>
-                <b>Step 3:</b> Vercel will show the exact DNS records you must add (A/CNAME). Copy them into your domain
-                registrar.
-              </div>
-              <div>
-                <b>Step 4:</b> DNS can take a bit to update (often minutes, sometimes longer).
-              </div>
+              <div><b>Step 1:</b> Buy a domain from GoDaddy, IONOS, Namecheap, etc.</div>
+              <div><b>Step 2:</b> In <b>Vercel → Project → Settings → Domains</b>, add your domain.</div>
+              <div><b>Step 3:</b> Vercel will show the exact DNS records you must add (A/CNAME). Copy them into your registrar.</div>
+              <div><b>Step 4:</b> DNS can take a bit to update (often minutes, sometimes longer).</div>
             </div>
 
             <div
@@ -157,8 +143,7 @@ export default function DomainClient() {
             >
               <div style={{ fontWeight: 900, marginBottom: 6 }}>Important</div>
               <div style={{ opacity: 0.92, fontSize: 13, lineHeight: 1.35 }}>
-                Vercel now uses an <b>optimized Anycast IP</b> per project/plan for Apex domains, so don’t guess the IP.
-                Use the one Vercel shows in your Project’s Domain Settings.
+                Don’t guess the Apex IP. Use the one Vercel shows under your project’s Domain settings.
               </div>
             </div>
 
@@ -234,5 +219,6 @@ const linkBtn: React.CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
 };
+
 
 
