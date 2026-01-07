@@ -65,7 +65,6 @@ export default function BuilderClient() {
       await refreshSites();
     };
     run();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function refreshSites() {
@@ -191,7 +190,7 @@ export default function BuilderClient() {
 
       // add attachment info into prompt
       const block = `\n\nATTACHMENT:\nNAME: ${n}\nMIME: ${m}\nURL: ${u}\n`;
-      const nextPrompt = prompt.includes(u) ? prompt : prompt + block;
+      const nextPrompt = prompt.includes(u) ? prompt : (prompt + block);
 
       setPrompt(nextPrompt);
 
@@ -427,28 +426,10 @@ export default function BuilderClient() {
               <button style={primaryBtn} onClick={runChat}>Send</button>
             </div>
 
-            {/* ✅ BUTTON near the bottom next to chat */}
-            <div
-              style={{
-                marginTop: 12,
-                padding: 12,
-                borderRadius: 14,
-                border: "1px solid rgba(255,255,255,0.18)",
-                background: "rgba(0,0,0,0.14)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 12,
-              }}
-            >
-              <div>
-                <div style={{ fontWeight: 900, fontSize: 14 }}>Ready to connect your domain?</div>
-                <div style={{ opacity: 0.85, fontSize: 12 }}>
-                  When the customer is done building, they can connect their domain in one step.
-                </div>
-              </div>
+            {/* ✅ Domain button near chat (what you asked for) */}
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
               <button style={secondaryBtn} onClick={() => router.push("/domain")}>
-                Connect Domain →
+                Connect a custom domain →
               </button>
             </div>
           </section>
@@ -568,5 +549,6 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
 
 
