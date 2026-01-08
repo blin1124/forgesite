@@ -1,113 +1,57 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
-import { createServerClient } from "@supabase/ssr";
 
 export const runtime = "nodejs";
 
-function jsonError(message: string, status = 400) {
+function jsonError(message: string, status = 500) {
   return NextResponse.json({ error: message }, { status });
 }
 
-function normalizeDomain(input: string) {
-  return input.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+function normalizeDomain(raw: string) {
+  const s = (raw || "").trim().toLowerCase();
+  if (!s) return "";
+  return s.replace(/^https?:\/\//, "").split("/")[0];
 }
 
-function isValidDomain(d: string) {
-  if (!d || d.length > 253) return false;
-  if (d.includes("/") || d.includes(" ")) return false;
-  if (!/^[a-z0-9.-]+\.[a-z0-9-]+$/i.test(d)) return false;
-  if (/^[.-]|[.-]$/.test(d)) return false;
-  return true;
-}
-
-async function getUserId() {
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll: () => cookies().getAll(),
-        setAll: () => {},
-      },
-    }
-  );
-
-  const { data } = await supabase.auth.getUser();
-  if (!data?.user?.id) throw new Error("Not authenticated");
-  return data.user.id;
-}
-
-async function addDomainToVercel(domain: string) {
-  const token = process.env.VERCEL_TOKEN!;
-  const projectId = process.env.VERCEL_PROJECT_ID!;
-
-  if (!token) throw new Error("Missing VERCEL_TOKEN");
-  if (!projectId) throw new Error("Missing VERCEL_PROJECT_ID");
-
-  const res = await fetch(`https://api.vercel.com/v10/projects/${projectId}/domains`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ name: domain }),
-  });
-
-  const text = await res.text();
-  let json: any = {};
-  try {
-    json = JSON.parse(text);
-  } catch {
-    json = { raw: text };
-  }
-
-  if (!res.ok) {
-    throw new Error(json?.error?.message || json?.message || "Vercel domain add failed");
-  }
-
-  return json;
-}
-
+/**
+ * Step 4 placeholder verification:
+ * Real verification would call hosting provider to check domain status.
+ * For now, we keep it pending and let UI flow exist.
+ */
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const rawDomain = String(body.domain || "");
+    const domain = normalizeDomain(String(body?.domain || ""));
+    if (!domain) return jsonError("Missing domain", 400);
 
-    const domain = normalizeDomain(rawDomain);
-    if (!isValidDomain(domain)) return jsonError("Invalid domain name");
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supabaseUrl || !serviceKey) return jsonError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY", 500);
 
-    const user_id = await getUserId();
+    const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
 
-    const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
-      auth: { persistSession: false },
-    });
+    // placeholder: keep pending (you can change to verified for testing)
+    const verified = false;
+    const status = verified ? "verified" : "pending";
 
-    // Create/update row first
-    await admin.from("custom_domains").upsert({
-      user_id,
-      domain,
-      status: "pending",
-      updated_at: new Date().toISOString(),
-    });
-
-    // Add to Vercel
-    const vercelPayload = await addDomainToVercel(domain);
-
-    // Mark as added
-    await admin
+    const { data, error } = await supabase
       .from("custom_domains")
       .update({
-        status: "added",
-        vercel_payload: vercelPayload,
-        updated_at: new Date().toISOString(),
+        verified,
+        status,
+        last_error: null,
       })
-      .eq("user_id", user_id)
-      .eq("domain", domain);
+      .eq("domain", domain)
+      .select("id,domain,status,verified,dns_records,last_error")
+      .single();
 
-    return NextResponse.json({ ok: true, domain, status: "added" });
+    if (error) return jsonError(error.message, 500);
+
+    return NextResponse.json(data);
   } catch (err: any) {
-    return jsonError(err?.message || "Domain connect failed", 500);
+    return jsonError(err?.message || "Connect crashed", 500);
   }
 }
+
+
 
