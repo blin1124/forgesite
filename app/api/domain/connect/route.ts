@@ -17,14 +17,22 @@ function getAdmin() {
   return createClient(url, service, { auth: { persistSession: false } });
 }
 
-async function getUserIdFromAuthHeader(admin: ReturnType<typeof createClient>, req: Request) {
+/**
+ * IMPORTANT:
+ * Do NOT type `admin` as a strict SupabaseClient generic here.
+ * Different projects have different SupabaseClient generic params
+ * (and that’s what caused your build error).
+ *
+ * Using `any` here fixes compilation without changing runtime behavior.
+ */
+async function getUserIdFromAuthHeader(admin: any, req: Request) {
   const auth = req.headers.get("authorization") || "";
   const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
   if (!token) throw new Error("Missing Authorization Bearer token.");
 
   const { data, error } = await admin.auth.getUser(token);
   if (error || !data?.user?.id) throw new Error("Invalid/expired session token.");
-  return data.user.id;
+  return data.user.id as string;
 }
 
 function normalizeDomain(input: string) {
@@ -40,7 +48,7 @@ export async function POST(req: Request) {
     const domain = normalizeDomain(String(body?.domain || ""));
     if (!domain) return jsonError("Missing domain", 400);
 
-    // Mark verification requested (real Vercel provisioning comes in Step 6)
+    // Keep behavior: save a record (no Vercel provisioning yet here)
     const verification = {
       requested_at: new Date().toISOString(),
       provider: "vercel",
@@ -50,7 +58,13 @@ export async function POST(req: Request) {
     const { data, error } = await admin
       .from("custom_domains")
       .upsert(
-        { user_id, domain, status: "pending", verification, updated_at: new Date().toISOString() },
+        {
+          user_id,
+          domain,
+          status: "pending",
+          verification,
+          updated_at: new Date().toISOString(),
+        },
         { onConflict: "user_id,domain" }
       )
       .select("id, domain, status, verified, dns_records, verification, created_at, updated_at")
@@ -60,12 +74,14 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       domain: data,
-      message: "Saved. Next step: we’ll wire Vercel provisioning so this returns real DNS verification challenges.",
+      message: "Saved. Next: wiring Vercel provisioning to return real DNS verification challenges.",
     });
   } catch (err: any) {
     return jsonError(err?.message || "Connect failed", 500);
   }
 }
+
+
 
 
 
