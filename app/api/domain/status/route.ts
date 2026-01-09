@@ -1,81 +1,46 @@
 import { NextResponse } from "next/server";
-import {
-  extractDnsRecordsFromConfig,
-  getSupabaseAdmin,
-  getUserIdFromRequest,
-  getVercelProjectId,
-  normalizeDomain,
-  vercelFetch,
-} from "../_lib";
+import { getUserIdFromAuthHeader, normalizeDomain, supabaseAdmin, vercelFetch, mustEnv } from "../_lib";
 
 export const runtime = "nodejs";
 
-function jsonError(message: string, status = 500) {
-  return NextResponse.json({ error: message }, { status });
-}
-
 export async function POST(req: Request) {
   try {
-    const admin = getSupabaseAdmin();
-    const user_id = await getUserIdFromRequest(req);
+    const admin = supabaseAdmin();
+    const user_id = await getUserIdFromAuthHeader(admin, req);
+    if (!user_id) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
     const body = await req.json().catch(() => ({}));
     const domain = normalizeDomain(String(body?.domain || ""));
-    if (!domain) return jsonError("Missing domain", 400);
+    if (!domain) return NextResponse.json({ error: "Missing domain" }, { status: 400 });
 
-    const projectId = getVercelProjectId();
+    const projectId = mustEnv("VERCEL_PROJECT_ID");
 
-    // Read from project-domain endpoint
-    const proj = await vercelFetch(`/v9/projects/${encodeURIComponent(projectId)}/domains/${encodeURIComponent(domain)}`, {
-      method: "GET",
-    });
+    const info = await vercelFetch(`/v10/projects/${projectId}/domains/${encodeURIComponent(domain)}`, { method: "GET" });
+    if (!info.ok) {
+      return NextResponse.json({ error: info.json?.error?.message || `Vercel status failed (${info.status})`, details: info.json || info.text }, { status: 500 });
+    }
 
-    // DNS config endpoint
-    const cfg = await vercelFetch(`/v9/domains/${encodeURIComponent(domain)}/config`, { method: "GET" });
-    const cfgJson = cfg.json ?? {};
-    const dns_records = extractDnsRecordsFromConfig(domain, cfgJson);
+    const verification = info.json;
+    const isVerified = Boolean(verification?.verified) === true;
 
-    // Determine “verified” best-effort
-    const verified =
-      Boolean(proj.json?.verified) ||
-      Boolean(cfgJson?.verified) ||
-      Boolean(cfgJson?.misconfigured === false);
-
-    const status = verified ? "verified" : "pending";
-
+    // Update DB row if it exists for this user/domain
     await admin
       .from("custom_domains")
-      .upsert(
-        {
-          user_id,
-          domain,
-          status,
-          verified,
-          dns_records,
-          vercel: { project: proj.json ?? { raw: proj.text }, config: cfgJson },
-          last_error: proj.res.ok && cfg.res.ok ? null : (proj.json?.error?.message || cfg.json?.error?.message || null),
-        },
-        { onConflict: "user_id,domain" }
-      );
+      .update({
+        verification,
+        verified: isVerified,
+        status: isVerified ? "verified" : "pending",
+        last_error: null,
+      })
+      .eq("user_id", user_id)
+      .eq("domain", domain);
 
     return NextResponse.json({
       domain,
-      status,
-      verified,
-      dns_records,
-      vercel_project: proj.json ?? null,
-      vercel_config: cfgJson,
+      verified: isVerified,
+      verification,
     });
   } catch (e: any) {
-    return jsonError(e?.message || "Status failed", 500);
+    return NextResponse.json({ error: e?.message || "Status failed" }, { status: 500 });
   }
 }
-
-
-
-
-
-
-
-
-
