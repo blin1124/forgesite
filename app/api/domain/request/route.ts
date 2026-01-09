@@ -1,70 +1,76 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import {
+  getUserFromCookie,
+  isLikelyDomain,
+  normalizeDomain,
+  mustEnv,
+  supabaseAdmin,
+  vercelFetch,
+} from "../_lib";
 
 export const runtime = "nodejs";
 
-function jsonError(message: string, status = 500) {
-  return NextResponse.json({ error: message }, { status });
-}
-
-function normalizeDomain(raw: string) {
-  const s = (raw || "").trim().toLowerCase();
-  if (!s) return "";
-  return s.replace(/^https?:\/\//, "").split("/")[0];
-}
-
-/**
- * Step 4 placeholder:
- * For now we generate *generic* DNS instructions (A + CNAME).
- * Later we’ll replace this with real Vercel API calls.
- */
-function makePlaceholderDns(domain: string) {
-  return {
-    domain,
-    records: [
-      { type: "A", name: "@", value: "76.76.21.21", note: "apex root points to hosting" },
-      { type: "CNAME", name: "www", value: "cname.vercel-dns.com", note: "www points to hosting" },
-    ],
-    note:
-      "These are placeholder records for the customer flow. In Step 4 you’ll replace this with exact records returned by your hosting provider API.",
-  };
-}
-
 export async function POST(req: Request) {
   try {
+    const user = await getUserFromCookie();
+    if (!user) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+
     const body = await req.json().catch(() => ({}));
-    const domain = normalizeDomain(String(body?.domain || ""));
-    if (!domain) return jsonError("Missing domain", 400);
+    const raw = String(body?.domain || "");
+    const domain = normalizeDomain(raw);
 
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!supabaseUrl || !serviceKey) return jsonError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY", 500);
+    if (!domain) return NextResponse.json({ error: "Missing domain" }, { status: 400 });
+    if (!isLikelyDomain(domain)) return NextResponse.json({ error: "Invalid domain" }, { status: 400 });
 
-    const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
+    const projectId = mustEnv("VERCEL_PROJECT_ID");
 
-    const dns_records = makePlaceholderDns(domain);
+    // 1) Add domain to project (auto-provision in Vercel)
+    const add = await vercelFetch(`/v10/projects/${projectId}/domains`, {
+      method: "POST",
+      body: JSON.stringify({ name: domain }),
+    });
 
-    // For now, user_id is null/empty unless you wire it.
-    const { data, error } = await supabase
+    // Vercel returns 409 if already added; treat as OK
+    if (!add.res.ok && add.res.status !== 409) {
+      throw new Error(add.json?.error?.message || `Vercel add failed (${add.res.status}): ${add.text.slice(0, 200)}`);
+    }
+
+    // 2) Get domain status + verification challenges
+    const info = await vercelFetch(`/v9/projects/${projectId}/domains/${encodeURIComponent(domain)}`, {
+      method: "GET",
+    });
+
+    if (!info.res.ok) {
+      throw new Error(info.json?.error?.message || `Vercel status failed (${info.res.status})`);
+    }
+
+    const verification = info.json || {};
+    const status = verification?.verified ? "verified" : "awaiting_dns";
+
+    // 3) Save in Supabase
+    const db = supabaseAdmin();
+    const { data, error } = await db
       .from("custom_domains")
       .upsert(
         {
+          user_id: user.id,
           domain,
-          status: "pending",
-          verified: false,
-          dns_records,
+          status,
+          verification,
           last_error: null,
         },
-        { onConflict: "domain" }
+        { onConflict: "user_id,domain" }
       )
-      .select("id,domain,status,verified,dns_records")
+      .select("id, domain, status, verification, created_at, updated_at")
       .single();
 
-    if (error) return jsonError(error.message, 500);
+    if (error) throw new Error(error.message);
 
-    return NextResponse.json(data);
-  } catch (err: any) {
-    return jsonError(err?.message || "Request crashed", 500);
+    return NextResponse.json({ domain: data });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || "Request failed" }, { status: 500 });
   }
 }
+
+
 
