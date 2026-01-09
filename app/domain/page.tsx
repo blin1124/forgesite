@@ -4,15 +4,3 @@ export default function DomainPage() {
   return <Client />;
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
