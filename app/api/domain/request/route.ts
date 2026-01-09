@@ -1,100 +1,89 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import {
+  extractDnsRecordsFromConfig,
+  getSupabaseAdmin,
+  getUserIdFromRequest,
+  getVercelProjectId,
+  normalizeDomain,
+  vercelFetch,
+} from "../_lib";
 
 export const runtime = "nodejs";
-
-/**
- * This route:
- * - Reads the logged-in user from Authorization: Bearer <access_token>
- * - Accepts { domain }
- * - Creates/updates a row in custom_domains for that user
- * - Returns the saved row
- *
- * NOTE: We intentionally use `admin: any` in getUserIdFromAuthHeader
- * to avoid Supabase generic typing compile errors in Next build.
- */
 
 function jsonError(message: string, status = 500) {
   return NextResponse.json({ error: message }, { status });
 }
 
-function getAdmin() {
-  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!url) throw new Error("Missing env: SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)");
-  if (!service) throw new Error("Missing env: SUPABASE_SERVICE_ROLE_KEY");
-
-  return createClient(url, service, { auth: { persistSession: false } });
-}
-
-async function getUserIdFromAuthHeader(admin: any, req: Request) {
-  const auth = req.headers.get("authorization") || "";
-  const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
-  if (!token) throw new Error("Missing Authorization Bearer token.");
-
-  const { data, error } = await admin.auth.getUser(token);
-  if (error || !data?.user?.id) throw new Error("Invalid/expired session token.");
-  return data.user.id as string;
-}
-
-function normalizeDomain(raw: string) {
-  let d = (raw || "").trim().toLowerCase();
-
-  // remove protocol
-  d = d.replace(/^https?:\/\//, "");
-
-  // remove path/query/hash if pasted
-  d = d.split("/")[0] || "";
-
-  // remove leading www.
-  d = d.replace(/^www\./, "");
-
-  // basic safety
-  d = d.replace(/\s+/g, "");
-  return d;
-}
-
 export async function POST(req: Request) {
   try {
-    const admin = getAdmin();
-    const user_id = await getUserIdFromAuthHeader(admin, req);
+    const admin = getSupabaseAdmin();
+    const user_id = await getUserIdFromRequest(req);
 
     const body = await req.json().catch(() => ({}));
-    const domainRaw = String(body?.domain || "");
-    const domain = normalizeDomain(domainRaw);
+    const domain = normalizeDomain(String(body?.domain || ""));
+    if (!domain) return jsonError("Enter a valid domain (example: yourbusiness.com)", 400);
 
-    if (!domain || !domain.includes(".")) {
-      return jsonError("Invalid domain. Example: yourbusiness.com", 400);
-    }
+    const projectId = getVercelProjectId();
 
-    // Upsert per-user per-domain (assumes you have a unique constraint on (user_id, domain))
-    const now = new Date().toISOString();
+    // 1) Attach the domain to your project (auto-provision step)
+    const add = await vercelFetch(`/v9/projects/${encodeURIComponent(projectId)}/domains`, {
+      method: "POST",
+      body: JSON.stringify({ name: domain }),
+    });
 
-    const { data, error } = await admin
-      .from("custom_domains")
-      .upsert(
-        [
+    // Vercel returns 409 if already added; treat as OK
+    if (!add.res.ok && add.res.status !== 409) {
+      const msg = add.json?.error?.message || add.json?.message || add.text || "Vercel add-domain failed";
+      await admin
+        .from("custom_domains")
+        .upsert(
           {
             user_id,
             domain,
-            status: "pending",
+            status: "failed",
             verified: false,
-            updated_at: now,
+            last_error: msg,
+            vercel: add.json ?? { raw: add.text },
           },
-        ],
+          { onConflict: "user_id,domain" }
+        );
+      return jsonError(msg, 500);
+    }
+
+    // 2) Ask Vercel for DNS config needed for verification
+    const cfg = await vercelFetch(`/v9/domains/${encodeURIComponent(domain)}/config`, { method: "GET" });
+    const cfgJson = cfg.json ?? {};
+    const dns_records = extractDnsRecordsFromConfig(domain, cfgJson);
+
+    // 3) Store domain row
+    await admin
+      .from("custom_domains")
+      .upsert(
+        {
+          user_id,
+          domain,
+          status: "pending",
+          verified: false,
+          dns_records,
+          vercel: { add: add.json ?? { ok: true }, config: cfgJson },
+          last_error: null,
+        },
         { onConflict: "user_id,domain" }
-      )
-      .select("id, user_id, domain, status, verified, dns_records, verification, created_at, updated_at")
-      .single();
+      );
 
-    if (error) return jsonError(error.message, 500);
-
-    return NextResponse.json({ domain: data });
-  } catch (err: any) {
-    return jsonError(err?.message || "Request failed", 500);
+    return NextResponse.json({
+      domain,
+      status: "pending",
+      verified: false,
+      dns_records,
+      vercel_config: cfgJson,
+    });
+  } catch (e: any) {
+    return jsonError(e?.message || "Request failed", 500);
   }
 }
+
+
 
 
 
