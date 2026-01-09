@@ -3,8 +3,8 @@ import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-function jsonError(message: string, status = 500, extra?: any) {
-  return NextResponse.json({ error: message, ...(extra ? { extra } : {}) }, { status });
+function jsonError(message: string, status = 500) {
+  return NextResponse.json({ error: message }, { status });
 }
 
 function getAdmin() {
@@ -17,14 +17,18 @@ function getAdmin() {
   return createClient(url, service, { auth: { persistSession: false } });
 }
 
-async function getUserIdFromAuthHeader(admin: ReturnType<typeof createClient>, req: Request) {
+/**
+ * IMPORTANT: keep `admin: any` to avoid SupabaseClient generic mismatch
+ * that breaks Next build (your exact error).
+ */
+async function getUserIdFromAuthHeader(admin: any, req: Request) {
   const auth = req.headers.get("authorization") || "";
   const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
   if (!token) throw new Error("Missing Authorization Bearer token.");
 
   const { data, error } = await admin.auth.getUser(token);
   if (error || !data?.user?.id) throw new Error("Invalid/expired session token.");
-  return data.user.id;
+  return data.user.id as string;
 }
 
 export async function GET(req: Request) {
@@ -34,7 +38,7 @@ export async function GET(req: Request) {
 
     const { data, error } = await admin
       .from("custom_domains")
-      .select("id, domain, status, verified, dns_records, verification, created_at, updated_at")
+      .select("id, user_id, domain, status, verified, dns_records, verification, created_at, updated_at")
       .eq("user_id", user_id)
       .order("created_at", { ascending: false });
 
@@ -45,4 +49,6 @@ export async function GET(req: Request) {
     return jsonError(err?.message || "List failed", 500);
   }
 }
+
+
 
