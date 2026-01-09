@@ -190,7 +190,7 @@ export default function BuilderClient() {
 
       // add attachment info into prompt
       const block = `\n\nATTACHMENT:\nNAME: ${n}\nMIME: ${m}\nURL: ${u}\n`;
-      const nextPrompt = prompt.includes(u) ? prompt : prompt + block;
+      const nextPrompt = prompt.includes(u) ? prompt : (prompt + block);
 
       setPrompt(nextPrompt);
 
@@ -416,23 +416,19 @@ export default function BuilderClient() {
               ))}
             </div>
 
-            {/* ✅ Step 6: Connect Domain button placed next to chat input + Send */}
-            <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-              <button
-                style={secondaryBtn}
-                onClick={() => router.push("/domain")}
-                title="Connect your domain after finishing your site"
-              >
-                Connect Domain
-              </button>
-
+            <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
               <input
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 placeholder="Tell the AI what to change…"
-                style={{ ...input, flex: 1 }}
+                style={{ ...input, flex: 1, minWidth: 220 }}
               />
               <button style={primaryBtn} onClick={runChat}>Send</button>
+
+              {/* ✅ NEW: Connect Domain button near chat */}
+              <button style={secondaryBtn} onClick={() => router.push("/domain")}>
+                Connect Domain
+              </button>
             </div>
           </section>
         </div>
@@ -551,6 +547,8 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
+
 
 
 
