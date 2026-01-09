@@ -7,51 +7,67 @@ function jsonError(message: string, status = 500) {
   return NextResponse.json({ error: message }, { status });
 }
 
-function normalizeDomain(raw: string) {
-  const s = (raw || "").trim().toLowerCase();
-  if (!s) return "";
-  return s.replace(/^https?:\/\//, "").split("/")[0];
+function getAdmin() {
+  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url) throw new Error("Missing env: SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)");
+  if (!service) throw new Error("Missing env: SUPABASE_SERVICE_ROLE_KEY");
+
+  return createClient(url, service, { auth: { persistSession: false } });
 }
 
-/**
- * Step 4 placeholder verification:
- * Real verification would call hosting provider to check domain status.
- * For now, we keep it pending and let UI flow exist.
- */
+async function getUserIdFromAuthHeader(admin: ReturnType<typeof createClient>, req: Request) {
+  const auth = req.headers.get("authorization") || "";
+  const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
+  if (!token) throw new Error("Missing Authorization Bearer token.");
+
+  const { data, error } = await admin.auth.getUser(token);
+  if (error || !data?.user?.id) throw new Error("Invalid/expired session token.");
+  return data.user.id;
+}
+
+function normalizeDomain(input: string) {
+  return input.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+}
+
 export async function POST(req: Request) {
   try {
+    const admin = getAdmin();
+    const user_id = await getUserIdFromAuthHeader(admin, req);
+
     const body = await req.json().catch(() => ({}));
     const domain = normalizeDomain(String(body?.domain || ""));
     if (!domain) return jsonError("Missing domain", 400);
 
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!supabaseUrl || !serviceKey) return jsonError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY", 500);
+    // Mark verification requested (real Vercel provisioning comes in Step 6)
+    const verification = {
+      requested_at: new Date().toISOString(),
+      provider: "vercel",
+      note: "Provisioning not yet enabled. This is the customer flow + DB wiring.",
+    };
 
-    const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
-
-    // placeholder: keep pending (you can change to verified for testing)
-    const verified = false;
-    const status = verified ? "verified" : "pending";
-
-    const { data, error } = await supabase
+    const { data, error } = await admin
       .from("custom_domains")
-      .update({
-        verified,
-        status,
-        last_error: null,
-      })
-      .eq("domain", domain)
-      .select("id,domain,status,verified,dns_records,last_error")
+      .upsert(
+        { user_id, domain, status: "pending", verification, updated_at: new Date().toISOString() },
+        { onConflict: "user_id,domain" }
+      )
+      .select("id, domain, status, verified, dns_records, verification, created_at, updated_at")
       .single();
 
     if (error) return jsonError(error.message, 500);
 
-    return NextResponse.json(data);
+    return NextResponse.json({
+      domain: data,
+      message: "Saved. Next step: we’ll wire Vercel provisioning so this returns real DNS verification challenges.",
+    });
   } catch (err: any) {
-    return jsonError(err?.message || "Connect crashed", 500);
+    return jsonError(err?.message || "Connect failed", 500);
   }
 }
+
+
 
 
 
