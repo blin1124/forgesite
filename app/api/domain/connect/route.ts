@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import {
+  extractDnsRecordsFromConfig,
+  getSupabaseAdmin,
+  getUserIdFromRequest,
+  getVercelProjectId,
+  normalizeDomain,
+  vercelFetch,
+} from "../_lib";
 
 export const runtime = "nodejs";
 
@@ -7,79 +14,82 @@ function jsonError(message: string, status = 500) {
   return NextResponse.json({ error: message }, { status });
 }
 
-function getAdmin() {
-  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!url) throw new Error("Missing env: SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)");
-  if (!service) throw new Error("Missing env: SUPABASE_SERVICE_ROLE_KEY");
-
-  return createClient(url, service, { auth: { persistSession: false } });
-}
-
-/**
- * IMPORTANT:
- * Do NOT type `admin` as a strict SupabaseClient generic here.
- * Different projects have different SupabaseClient generic params
- * (and that’s what caused your build error).
- *
- * Using `any` here fixes compilation without changing runtime behavior.
- */
-async function getUserIdFromAuthHeader(admin: any, req: Request) {
-  const auth = req.headers.get("authorization") || "";
-  const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
-  if (!token) throw new Error("Missing Authorization Bearer token.");
-
-  const { data, error } = await admin.auth.getUser(token);
-  if (error || !data?.user?.id) throw new Error("Invalid/expired session token.");
-  return data.user.id as string;
-}
-
-function normalizeDomain(input: string) {
-  return input.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
-}
-
 export async function POST(req: Request) {
   try {
-    const admin = getAdmin();
-    const user_id = await getUserIdFromAuthHeader(admin, req);
+    const admin = getSupabaseAdmin();
+    const user_id = await getUserIdFromRequest(req);
 
     const body = await req.json().catch(() => ({}));
     const domain = normalizeDomain(String(body?.domain || ""));
     if (!domain) return jsonError("Missing domain", 400);
 
-    // Keep behavior: save a record (no Vercel provisioning yet here)
-    const verification = {
-      requested_at: new Date().toISOString(),
-      provider: "vercel",
-      note: "Provisioning not yet enabled. This is the customer flow + DB wiring.",
-    };
+    const projectId = getVercelProjectId();
 
-    const { data, error } = await admin
+    // 1) Trigger verification on the project domain
+    const verify = await vercelFetch(
+      `/v9/projects/${encodeURIComponent(projectId)}/domains/${encodeURIComponent(domain)}/verify`,
+      { method: "POST" }
+    );
+
+    // 2) Read latest status + config
+    const proj = await vercelFetch(`/v9/projects/${encodeURIComponent(projectId)}/domains/${encodeURIComponent(domain)}`, {
+      method: "GET",
+    });
+
+    const cfg = await vercelFetch(`/v9/domains/${encodeURIComponent(domain)}/config`, { method: "GET" });
+    const cfgJson = cfg.json ?? {};
+    const dns_records = extractDnsRecordsFromConfig(domain, cfgJson);
+
+    const verified =
+      Boolean(proj.json?.verified) ||
+      Boolean(cfgJson?.verified) ||
+      Boolean(cfgJson?.misconfigured === false);
+
+    const status = verified ? "verified" : "pending";
+
+    const last_error =
+      verify.res.ok && proj.res.ok && cfg.res.ok
+        ? null
+        : (verify.json?.error?.message ||
+            proj.json?.error?.message ||
+            cfg.json?.error?.message ||
+            verify.json?.message ||
+            null);
+
+    await admin
       .from("custom_domains")
       .upsert(
         {
           user_id,
           domain,
-          status: "pending",
-          verification,
-          updated_at: new Date().toISOString(),
+          status,
+          verified,
+          dns_records,
+          vercel: { verify: verify.json ?? { raw: verify.text }, project: proj.json ?? null, config: cfgJson },
+          last_error,
         },
         { onConflict: "user_id,domain" }
-      )
-      .select("id, domain, status, verified, dns_records, verification, created_at, updated_at")
-      .single();
+      );
 
-    if (error) return jsonError(error.message, 500);
+    if (!verify.res.ok && !verified) {
+      return jsonError(last_error || "Verification failed", 500);
+    }
 
     return NextResponse.json({
-      domain: data,
-      message: "Saved. Next: wiring Vercel provisioning to return real DNS verification challenges.",
+      domain,
+      status,
+      verified,
+      dns_records,
+      vercel_verify: verify.json ?? null,
+      vercel_project: proj.json ?? null,
+      vercel_config: cfgJson,
     });
-  } catch (err: any) {
-    return jsonError(err?.message || "Connect failed", 500);
+  } catch (e: any) {
+    return jsonError(e?.message || "Connect failed", 500);
   }
 }
+
+
 
 
 
