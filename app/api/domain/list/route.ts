@@ -1,33 +1,27 @@
+// app/api/domain/list/route.ts
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { getUserFromCookie, supabaseAdmin } from "../_lib";
 
 export const runtime = "nodejs";
 
-function jsonError(message: string, status = 500) {
-  return NextResponse.json({ error: message }, { status });
-}
-
 export async function GET() {
   try {
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!supabaseUrl || !serviceKey) return jsonError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY", 500);
+    const user = await getUserFromCookie();
+    if (!user) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-    const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
-
-    // If you haven’t wired auth-user filtering yet, this will list all.
-    // Later you will add: .eq("user_id", auth.uid()) by switching to RLS + user client.
-    const { data, error } = await supabase
+    const db = supabaseAdmin();
+    const { data, error } = await db
       .from("custom_domains")
-      .select("id,user_id,domain,status,verified,created_at,dns_records,last_error")
-      .order("created_at", { ascending: false })
-      .limit(200);
+      .select("id, domain, status, verification, last_error, created_at, updated_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false });
 
-    if (error) return jsonError(error.message, 500);
+    if (error) throw new Error(error.message);
 
     return NextResponse.json({ domains: data || [] });
-  } catch (err: any) {
-    return jsonError(err?.message || "List crashed", 500);
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || "List failed" }, { status: 500 });
   }
 }
+
 
