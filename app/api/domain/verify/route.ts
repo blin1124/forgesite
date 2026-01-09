@@ -1,71 +1,67 @@
 import { NextResponse } from "next/server";
-import {
-  setRequestContext,
-  clearRequestContext,
-  getUserFromCookie,
-  mustEnv,
-  normalizeDomain,
-  supabaseAdmin,
-  vercelFetch,
-  extractDnsRecordsFromConfig,
-  getVercelProjectId,
-} from "../_lib";
+import { getUserIdFromAuthHeader, normalizeDomain, supabaseAdmin, vercelFetch, mustEnv } from "../_lib";
 
 export const runtime = "nodejs";
 
-function jsonError(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status });
-}
-
 export async function POST(req: Request) {
-  setRequestContext(req);
   try {
-    const user = await getUserFromCookie();
-    if (!user) return jsonError("Not signed in", 401);
+    const admin = supabaseAdmin();
+    const user_id = await getUserIdFromAuthHeader(admin, req);
+    if (!user_id) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
     const body = await req.json().catch(() => ({}));
     const domain = normalizeDomain(String(body?.domain || ""));
-    if (!domain) return jsonError("Missing domain", 400);
+    if (!domain) return NextResponse.json({ error: "Missing domain" }, { status: 400 });
 
-    // Ensure env exists
-    mustEnv("VERCEL_TOKEN");
-    const projectId = getVercelProjectId();
+    const projectId = mustEnv("VERCEL_PROJECT_ID");
 
-    // Ask Vercel for domain config (DNS records / status)
-    const { res, json, text } = await vercelFetch(`/v9/projects/${projectId}/domains/${encodeURIComponent(domain)}/config`, {
+    // 1) Ask Vercel to verify now (this exists for many domain states)
+    const v = await vercelFetch(`/v10/projects/${projectId}/domains/${encodeURIComponent(domain)}/verify`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+
+    // Some accounts/plans/states may not support verify endpoint;
+    // we still do a GET afterwards to determine true status.
+    const info = await vercelFetch(`/v10/projects/${projectId}/domains/${encodeURIComponent(domain)}`, {
       method: "GET",
     });
 
-    if (!res.ok) {
-      return jsonError(json?.error?.message || `Vercel config failed (${res.status}): ${text.slice(0, 240)}`, 500);
+    if (!info.ok) {
+      await admin
+        .from("custom_domains")
+        .update({ status: "error", last_error: info.json?.error?.message || info.text || `Vercel status failed (${info.status})` })
+        .eq("user_id", user_id)
+        .eq("domain", domain);
+
+      return NextResponse.json(
+        { error: info.json?.error?.message || `Vercel status failed (${info.status})`, details: info.json || info.text },
+        { status: 500 }
+      );
     }
 
-    const records = extractDnsRecordsFromConfig(domain, json);
+    const verification = info.json;
+    const isVerified = Boolean(verification?.verified) === true;
 
-    // Save latest snapshot for the user+domain (optional but useful)
-    // You can remove this if your schema differs.
-    await supabaseAdmin
+    await admin
       .from("custom_domains")
       .update({
-        // keep flexible — only update if columns exist in your schema
-        last_checked_at: new Date().toISOString(),
-        // store DNS records snapshot if you have a jsonb column named dns_records
-        dns_records: records as any,
-      } as any)
-      .eq("user_id", user.id)
+        verification,
+        verified: isVerified,
+        status: isVerified ? "verified" : "pending",
+        last_error: isVerified ? null : (v.ok ? null : (v.json?.error?.message || v.text || "Verify endpoint error")),
+      })
+      .eq("user_id", user_id)
       .eq("domain", domain);
 
     return NextResponse.json({
-      ok: true,
       domain,
-      records,
-      raw: json, // keep for debugging
+      verified: isVerified,
+      verify_call: v.ok ? v.json : { error: v.json?.error?.message || v.text || `Verify failed (${v.status})` },
+      verification,
     });
-  } catch (err: any) {
-    return jsonError(err?.message || "Verify route crashed", 500);
-  } finally {
-    clearRequestContext();
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || "Verify failed" }, { status: 500 });
   }
 }
-
 
