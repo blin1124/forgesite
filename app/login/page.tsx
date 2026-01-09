@@ -1,91 +1,81 @@
-import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+// app/login/page.tsx
+import Link from "next/link";
 
 export const runtime = "nodejs";
 
-/**
- * Supabase redirects here after login with:
- *   /auth/callback?code=...&next=/builder
- *
- * We exchange the `code` for a session and then redirect to `next`.
- */
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const code = url.searchParams.get("code");
-  const next = url.searchParams.get("next") || "/builder";
+export default function LoginPage() {
+  return (
+    <main
+      style={{
+        minHeight: "100vh",
+        padding: 16,
+        color: "white",
+        background:
+          "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(124,58,237) 0%, rgb(109,40,217) 35%, rgb(91,33,182) 100%)",
+        fontFamily:
+          'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
+        display: "grid",
+        placeItems: "center",
+      }}
+    >
+      <div
+        style={{
+          width: "min(720px, 100%)",
+          background: "rgba(255,255,255,0.12)",
+          border: "1px solid rgba(255,255,255,0.18)",
+          borderRadius: 18,
+          padding: 18,
+          boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
+        }}
+      >
+        <div style={{ fontSize: 44, fontWeight: 900, lineHeight: 1 }}>Login</div>
+        <div style={{ opacity: 0.9, marginTop: 8 }}>
+          Sign in to access the Builder.
+        </div>
 
-  if (!code) {
-    // No code -> send to login
-    return NextResponse.redirect(new URL(`/login?next=${encodeURIComponent(next)}`, url.origin));
-  }
+        <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <a
+            href="/auth"
+            style={{
+              padding: "12px 14px",
+              borderRadius: 12,
+              border: "1px solid rgba(255,255,255,0.18)",
+              background: "rgba(255,255,255,0.92)",
+              color: "rgb(85, 40, 150)",
+              fontWeight: 900,
+              cursor: "pointer",
+              textDecoration: "none",
+            }}
+          >
+            Continue
+          </a>
 
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const anonKey = process.env.SUPABASE_ANON_KEY;
+          <Link
+            href="/"
+            style={{
+              padding: "12px 14px",
+              borderRadius: 12,
+              border: "1px solid rgba(255,255,255,0.25)",
+              background: "rgba(255,255,255,0.14)",
+              color: "white",
+              fontWeight: 900,
+              cursor: "pointer",
+              textDecoration: "none",
+            }}
+          >
+            Back to home
+          </Link>
+        </div>
 
-  if (!supabaseUrl || !anonKey) {
-    return NextResponse.redirect(
-      new URL(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent("Missing SUPABASE_URL or SUPABASE_ANON_KEY")}`, url.origin)
-    );
-  }
-
-  // IMPORTANT: we do a server-side code exchange, then set cookies manually
-  // using the "PKCE exchange" endpoint. Supabase-js needs a cookie adapter in Next.
-  // Easiest reliable approach: call Supabase token endpoint directly.
-
-  // If your project uses the official @supabase/ssr helpers, use them instead.
-  // But this version works as long as SUPABASE_URL + SUPABASE_ANON_KEY exist.
-
-  const tokenUrl = `${supabaseUrl}/auth/v1/token?grant_type=pkce`;
-  const resp = await fetch(tokenUrl, {
-    method: "POST",
-    headers: {
-      "apikey": anonKey,
-      "authorization": `Bearer ${anonKey}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ auth_code: code }),
-  });
-
-  if (!resp.ok) {
-    const msg = await resp.text().catch(() => "");
-    return NextResponse.redirect(
-      new URL(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent("Auth exchange failed: " + msg.slice(0, 120))}`, url.origin)
-    );
-  }
-
-  const data = await resp.json();
-  const access_token = data?.access_token;
-  const refresh_token = data?.refresh_token;
-
-  if (!access_token || !refresh_token) {
-    return NextResponse.redirect(
-      new URL(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent("Missing tokens from exchange")}`, url.origin)
-    );
-  }
-
-  // Supabase stores session in cookies. We'll set the standard sb- cookies.
-  // Cookie names vary by project; simplest is to set the `sb-access-token` style.
-  // If your project already had cookies working previously, this will restore session persistence.
-
-  const res = NextResponse.redirect(new URL(next, url.origin));
-
-  // HTTP-only cookies for session
-  res.cookies.set("sb-access-token", access_token, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    path: "/",
-  });
-
-  res.cookies.set("sb-refresh-token", refresh_token, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    path: "/",
-  });
-
-  return res;
+        <div style={{ marginTop: 14, opacity: 0.8, fontSize: 13 }}>
+          If you intended to handle OAuth here, that logic belongs in{" "}
+          <code>app/auth/callback/route.ts</code>, not this page.
+        </div>
+      </div>
+    </main>
+  );
 }
+
 
 
 
