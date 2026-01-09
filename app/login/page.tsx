@@ -1,13 +1,65 @@
-import Link from "next/link";
+"use client";
 
-export const runtime = "nodejs";
+import React, { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 export default function LoginPage() {
+  const router = useRouter();
+  const sp = useSearchParams();
+
+  const next = sp.get("next") || "/builder";
+
+  const [email, setEmail] = useState<string>("");
+  const [busy, setBusy] = useState<string>("");
+  const [debug, setDebug] = useState<string>("");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const supabase = createSupabaseBrowserClient();
+        const { data } = await supabase.auth.getSession();
+        setEmail(data?.session?.user?.email || "");
+      } catch {
+        setEmail("");
+      }
+    })();
+  }, []);
+
+  async function continueToApp() {
+    router.push(next);
+  }
+
+  async function signInWithGoogle() {
+    setBusy("");
+    setDebug("");
+
+    try {
+      setBusy("Redirecting to Google…");
+
+      const supabase = createSupabaseBrowserClient();
+      const origin = window.location.origin;
+
+      // ✅ Supabase OAuth: sends user to /auth/callback which exchanges the code for a session
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next)}`,
+        },
+      });
+
+      if (error) throw error;
+    } catch (e: any) {
+      setBusy("");
+      setDebug(e?.message || "Sign-in failed");
+    }
+  }
+
   return (
     <main
       style={{
         minHeight: "100vh",
-        padding: 16,
+        padding: 18,
         color: "white",
         background:
           "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(124,58,237) 0%, rgb(109,40,217) 35%, rgb(91,33,182) 100%)",
@@ -17,63 +69,112 @@ export default function LoginPage() {
         placeItems: "center",
       }}
     >
-      <div
-        style={{
-          width: "min(720px, 100%)",
-          background: "rgba(255,255,255,0.12)",
-          border: "1px solid rgba(255,255,255,0.18)",
-          borderRadius: 18,
-          padding: 18,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
-        }}
-      >
-        <div style={{ fontSize: 44, fontWeight: 900, lineHeight: 1 }}>Login</div>
+      <div style={{ width: "min(860px, 100%)" }}>
+        <div style={{ fontSize: 54, fontWeight: 900, lineHeight: 1.05 }}>
+          ForgeSite
+        </div>
         <div style={{ opacity: 0.9, marginTop: 8 }}>
           Sign in to access the Builder.
         </div>
 
-        <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <a
-            href="/auth"
-            style={{
-              padding: "12px 14px",
-              borderRadius: 12,
-              border: "1px solid rgba(255,255,255,0.18)",
-              background: "rgba(255,255,255,0.92)",
-              color: "rgb(85, 40, 150)",
-              fontWeight: 900,
-              cursor: "pointer",
-              textDecoration: "none",
-            }}
-          >
-            Continue
-          </a>
+        <section style={{ ...card, marginTop: 18 }}>
+          {email ? (
+            <>
+              <div style={{ fontSize: 20, fontWeight: 900 }}>You’re signed in</div>
+              <div style={{ opacity: 0.9, marginTop: 6 }}>
+                Signed in as <b>{email}</b>
+              </div>
 
-          <Link
-            href="/"
-            style={{
-              padding: "12px 14px",
-              borderRadius: 12,
-              border: "1px solid rgba(255,255,255,0.25)",
-              background: "rgba(255,255,255,0.14)",
-              color: "white",
-              fontWeight: 900,
-              cursor: "pointer",
-              textDecoration: "none",
-            }}
-          >
-            Back to home
-          </Link>
-        </div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+                <button style={primaryBtn} onClick={continueToApp}>
+                  Continue →
+                </button>
+                <button
+                  style={secondaryBtn}
+                  onClick={async () => {
+                    const supabase = createSupabaseBrowserClient();
+                    await supabase.auth.signOut();
+                    setEmail("");
+                  }}
+                >
+                  Log out
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 20, fontWeight: 900 }}>Sign in</div>
+              <div style={{ opacity: 0.9, marginTop: 6 }}>
+                Use Google to sign in. You’ll come back here automatically.
+              </div>
 
-        <div style={{ marginTop: 14, opacity: 0.8, fontSize: 13 }}>
-          If you intended to handle OAuth here, that logic belongs in{" "}
-          <code>app/auth/callback/route.ts</code>, not this page.
-        </div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+                <button style={primaryBtn} onClick={signInWithGoogle}>
+                  Continue with Google →
+                </button>
+                <button
+                  style={secondaryBtn}
+                  onClick={() => router.push("/")}
+                >
+                  Back home
+                </button>
+              </div>
+            </>
+          )}
+
+          {busy ? (
+            <div style={{ marginTop: 12, padding: 10, borderRadius: 12, background: "rgba(0,0,0,0.25)" }}>
+              {busy}
+            </div>
+          ) : null}
+
+          {debug ? (
+            <div
+              style={{
+                marginTop: 12,
+                padding: 10,
+                borderRadius: 12,
+                background: "rgba(185, 28, 28, .25)",
+                border: "1px solid rgba(185, 28, 28, .5)",
+              }}
+            >
+              <div style={{ fontWeight: 900 }}>Debug</div>
+              <div style={{ whiteSpace: "pre-wrap", fontSize: 12, opacity: 0.95 }}>{debug}</div>
+            </div>
+          ) : null}
+        </section>
       </div>
     </main>
   );
 }
+
+const card: React.CSSProperties = {
+  background: "rgba(255,255,255,0.12)",
+  border: "1px solid rgba(255,255,255,0.18)",
+  borderRadius: 18,
+  padding: 16,
+  boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
+};
+
+const primaryBtn: React.CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(255,255,255,0.92)",
+  color: "rgb(85, 40, 150)",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
+const secondaryBtn: React.CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.25)",
+  background: "rgba(255,255,255,0.14)",
+  color: "white",
+  fontWeight: 900,
+  cursor: "pointer",
+};
 
 
 
