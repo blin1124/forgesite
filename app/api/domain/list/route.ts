@@ -1,4 +1,3 @@
-// app/api/domain/list/route.ts
 import { NextResponse } from "next/server";
 import { getUserFromCookie, supabaseAdmin } from "../_lib";
 
@@ -23,5 +22,6 @@ export async function GET() {
     return NextResponse.json({ error: e?.message || "List failed" }, { status: 500 });
   }
 }
+
 
 
