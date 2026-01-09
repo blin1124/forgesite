@@ -23,18 +23,28 @@ export function getSupabaseAdmin(): SupabaseClient {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
-/**
- * Back-compat export (older routes import `supabaseAdmin`)
- * NOTE: This creates a client once per server instance, which is fine.
- */
+/** Back-compat export (older routes import `supabaseAdmin`) */
 export const supabaseAdmin = getSupabaseAdmin();
 
-/** ---------- AUTH HELPERS ---------- */
+/** ---------- REQUEST CONTEXT (for zero-arg helpers) ---------- */
+let _currentReq: Request | null = null;
+
 /**
- * Try to extract a bearer token from:
- * - Authorization: Bearer <token>
- * - cookies (common Supabase cookie names)
+ * Back-compat: allow routes to set the "current request" once,
+ * so helpers like getUserFromCookie() can be called with 0 args.
  */
+export function setRequestContext(req: Request) {
+  _currentReq = req;
+}
+export function clearRequestContext() {
+  _currentReq = null;
+}
+function requireReqFromContext(): Request {
+  if (!_currentReq) throw new Error("Missing request context. Call setRequestContext(req) first.");
+  return _currentReq;
+}
+
+/** ---------- AUTH HELPERS ---------- */
 function getTokenFromRequest(req: Request): string | null {
   const auth = req.headers.get("authorization") || "";
   if (auth.toLowerCase().startsWith("bearer ")) return auth.slice(7).trim();
@@ -49,20 +59,12 @@ function getTokenFromRequest(req: Request): string | null {
     map.set(k, decodeURIComponent(rest.join("=") || ""));
   });
 
-  // Common Supabase cookie keys (varies by setup)
-  const candidates = [
-    "sb-access-token",
-    "sb:token",
-    "supabase-auth-token",
-    "access_token",
-  ];
-
+  const candidates = ["sb-access-token", "sb:token", "supabase-auth-token", "access_token"];
   for (const k of candidates) {
     const v = map.get(k);
     if (v) return v;
   }
 
-  // Some setups store JSON in `supabase-auth-token`
   const maybeJson = map.get("supabase-auth-token");
   if (maybeJson) {
     try {
@@ -78,10 +80,6 @@ function getTokenFromRequest(req: Request): string | null {
   return null;
 }
 
-/**
- * NEW recommended helper:
- * Returns the authed user id using the access token in headers/cookies.
- */
 export async function getUserIdFromRequest(req: Request): Promise<string> {
   const admin = getSupabaseAdmin();
   const token = getTokenFromRequest(req);
@@ -89,29 +87,47 @@ export async function getUserIdFromRequest(req: Request): Promise<string> {
 
   const { data, error } = await admin.auth.getUser(token);
   if (error) throw new Error(error.message || "Auth getUser failed");
+
   const userId = data?.user?.id;
   if (!userId) throw new Error("No user on session.");
   return userId;
 }
 
 /**
- * Back-compat helper:
- * Older routes import `getUserFromCookie(admin, req)` or `getUserFromCookie(req)`
- * We support BOTH call styles.
+ * ✅ Back-compat helper with ALL call styles:
+ * - getUserFromCookie()
+ * - getUserFromCookie(req)
+ * - getUserFromCookie(admin, req)
  */
+export async function getUserFromCookie(): Promise<{ id: string } | null>;
+export async function getUserFromCookie(req: Request): Promise<{ id: string } | null>;
+export async function getUserFromCookie(admin: SupabaseClient, req: Request): Promise<{ id: string } | null>;
 export async function getUserFromCookie(
-  a: SupabaseClient | Request,
+  a?: SupabaseClient | Request,
   b?: Request
-): Promise<{ id: string }> {
-  const req = (b ?? a) as Request;
-  const userId = await getUserIdFromRequest(req);
-  return { id: userId };
+): Promise<{ id: string } | null> {
+  let req: Request;
+
+  // 0-arg: use request context
+  if (!a) {
+    req = requireReqFromContext();
+  } else if (a instanceof Request) {
+    // 1-arg: a is req
+    req = a;
+  } else {
+    // 2-arg: (admin, req) - admin is unused, but supported
+    req = b as Request;
+  }
+
+  try {
+    const userId = await getUserIdFromRequest(req);
+    return { id: userId };
+  } catch {
+    return null;
+  }
 }
 
-/**
- * Back-compat helper:
- * Some earlier code used `getUserIdFromAuthHeader(admin, req)`
- */
+/** Back-compat helper: older code used getUserIdFromAuthHeader(admin, req) */
 export async function getUserIdFromAuthHeader(_admin: SupabaseClient, req: Request): Promise<string> {
   return getUserIdFromRequest(req);
 }
@@ -128,7 +144,6 @@ export function normalizeDomain(input: string) {
 export function getVercelToken() {
   return mustEnv("VERCEL_TOKEN");
 }
-
 export function getVercelProjectId() {
   return mustEnv("VERCEL_PROJECT_ID");
 }
@@ -158,11 +173,7 @@ export async function vercelFetch(path: string, init?: RequestInit) {
   return { res, text, json };
 }
 
-/**
- * Convert Vercel domain config response into a simple list the UI can display.
- * Vercel returns different shapes depending on state; we normalize it.
- */
-export function extractDnsRecordsFromConfig(domain: string, cfg: any) {
+export function extractDnsRecordsFromConfig(_domain: string, cfg: any) {
   const out: Array<{ type: string; name: string; value: string; ttl?: number }> = [];
 
   const challenges = cfg?.conflicts || cfg?.configuration?.conflicts || [];
@@ -179,8 +190,6 @@ export function extractDnsRecordsFromConfig(domain: string, cfg: any) {
   if (Array.isArray(records)) records.forEach(add);
   if (Array.isArray(challenges)) challenges.forEach(add);
 
-  // As a fallback, Vercel sometimes tells you a "misconfigured" state without explicit records.
-  // We keep it empty in that case; UI will show "no records yet".
   return out;
 }
 
