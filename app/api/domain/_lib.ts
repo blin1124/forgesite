@@ -1,70 +1,147 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-function requiredEnv(name: string) {
+/** ---------- ENV ---------- */
+export function mustEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env: ${name}`);
   return v;
 }
 
-export function getSupabaseAdmin() {
-  const url = requiredEnv("SUPABASE_URL");
-  const key = requiredEnv("SUPABASE_SERVICE_ROLE_KEY");
+export function getSupabaseUrl() {
+  return mustEnv("SUPABASE_URL");
+}
+export function getServiceRoleKey() {
+  return mustEnv("SUPABASE_SERVICE_ROLE_KEY");
+}
+
+/** ---------- SUPABASE ADMIN ---------- */
+export function getSupabaseAdmin(): SupabaseClient {
+  const url = getSupabaseUrl();
+  const key = getServiceRoleKey();
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
-export async function getUserIdFromRequest(req: Request) {
+/**
+ * Back-compat export (older routes import `supabaseAdmin`)
+ * NOTE: This creates a client once per server instance, which is fine.
+ */
+export const supabaseAdmin = getSupabaseAdmin();
+
+/** ---------- AUTH HELPERS ---------- */
+/**
+ * Try to extract a bearer token from:
+ * - Authorization: Bearer <token>
+ * - cookies (common Supabase cookie names)
+ */
+function getTokenFromRequest(req: Request): string | null {
   const auth = req.headers.get("authorization") || "";
-  const m = auth.match(/^Bearer\s+(.+)$/i);
-  const token = m?.[1]?.trim();
-  if (!token) throw new Error("Missing Authorization Bearer token");
+  if (auth.toLowerCase().startsWith("bearer ")) return auth.slice(7).trim();
 
+  const cookie = req.headers.get("cookie") || "";
+  if (!cookie) return null;
+
+  const map = new Map<string, string>();
+  cookie.split(";").forEach((part) => {
+    const [k, ...rest] = part.trim().split("=");
+    if (!k) return;
+    map.set(k, decodeURIComponent(rest.join("=") || ""));
+  });
+
+  // Common Supabase cookie keys (varies by setup)
+  const candidates = [
+    "sb-access-token",
+    "sb:token",
+    "supabase-auth-token",
+    "access_token",
+  ];
+
+  for (const k of candidates) {
+    const v = map.get(k);
+    if (v) return v;
+  }
+
+  // Some setups store JSON in `supabase-auth-token`
+  const maybeJson = map.get("supabase-auth-token");
+  if (maybeJson) {
+    try {
+      const parsed = JSON.parse(maybeJson);
+      if (typeof parsed === "string") return parsed;
+      if (Array.isArray(parsed) && parsed[0]?.access_token) return String(parsed[0].access_token);
+      if (parsed?.access_token) return String(parsed.access_token);
+    } catch {
+      // ignore
+    }
+  }
+
+  return null;
+}
+
+/**
+ * NEW recommended helper:
+ * Returns the authed user id using the access token in headers/cookies.
+ */
+export async function getUserIdFromRequest(req: Request): Promise<string> {
   const admin = getSupabaseAdmin();
+  const token = getTokenFromRequest(req);
+  if (!token) throw new Error("Missing auth token (cookie/Authorization).");
 
-  // Use Supabase Auth to validate the JWT and get the user
   const { data, error } = await admin.auth.getUser(token);
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(error.message || "Auth getUser failed");
   const userId = data?.user?.id;
-  if (!userId) throw new Error("Not authenticated");
+  if (!userId) throw new Error("No user on session.");
   return userId;
 }
 
+/**
+ * Back-compat helper:
+ * Older routes import `getUserFromCookie(admin, req)` or `getUserFromCookie(req)`
+ * We support BOTH call styles.
+ */
+export async function getUserFromCookie(
+  a: SupabaseClient | Request,
+  b?: Request
+): Promise<{ id: string }> {
+  const req = (b ?? a) as Request;
+  const userId = await getUserIdFromRequest(req);
+  return { id: userId };
+}
+
+/**
+ * Back-compat helper:
+ * Some earlier code used `getUserIdFromAuthHeader(admin, req)`
+ */
+export async function getUserIdFromAuthHeader(_admin: SupabaseClient, req: Request): Promise<string> {
+  return getUserIdFromRequest(req);
+}
+
+/** ---------- DOMAIN NORMALIZATION ---------- */
 export function normalizeDomain(input: string) {
-  let d = (input || "").trim().toLowerCase();
-  d = d.replace(/^https?:\/\//, "");
-  d = d.replace(/^www\./, "");
-  d = d.split("/")[0] || "";
-  d = d.replace(/:\d+$/, "");
-  if (!d || d.length < 3) return "";
-  // super basic guard
-  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(d)) return "";
-  return d;
+  const d = (input || "").trim().toLowerCase();
+  if (!d) return "";
+  const stripped = d.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  return stripped.replace(/\.$/, "");
 }
 
-function vercelBase() {
-  // Vercel API versions vary by endpoint; these are stable:
-  // - /v9/projects/:id/domains
-  // - /v9/domains/:domain/config
-  return "https://api.vercel.com";
+/** ---------- VERCEL ---------- */
+export function getVercelToken() {
+  return mustEnv("VERCEL_TOKEN");
 }
 
-function teamQS() {
-  const teamId = process.env.VERCEL_TEAM_ID;
-  return teamId ? `?teamId=${encodeURIComponent(teamId)}` : "";
+export function getVercelProjectId() {
+  return mustEnv("VERCEL_PROJECT_ID");
 }
 
 export async function vercelFetch(path: string, init?: RequestInit) {
-  const token = requiredEnv("VERCEL_TOKEN");
-  const url = `${vercelBase()}${path}${path.includes("?") ? "&" : teamQS() ? "?" : ""}${
-    teamQS() ? (path.includes("?") ? teamQS().slice(1) : teamQS().slice(1)) : ""
-  }`;
+  const token = getVercelToken();
+  const url = `https://api.vercel.com${path}`;
 
   const res = await fetch(url, {
     ...init,
     headers: {
-      "content-type": "application/json",
       authorization: `Bearer ${token}`,
+      "content-type": "application/json",
       ...(init?.headers || {}),
     },
     cache: "no-store",
@@ -73,7 +150,7 @@ export async function vercelFetch(path: string, init?: RequestInit) {
   const text = await res.text();
   let json: any = null;
   try {
-    json = JSON.parse(text);
+    json = text ? JSON.parse(text) : null;
   } catch {
     json = null;
   }
@@ -81,61 +158,29 @@ export async function vercelFetch(path: string, init?: RequestInit) {
   return { res, text, json };
 }
 
-export function getVercelProjectId() {
-  return requiredEnv("VERCEL_PROJECT_ID");
-}
-
 /**
- * Returns DNS “instructions” for the registrar based on Vercel’s config response.
- * Vercel returns shapes like:
- * - { configuredBy, misconfigured, conflicts, cnames, aValues, ... }
- * - sometimes verification info
+ * Convert Vercel domain config response into a simple list the UI can display.
+ * Vercel returns different shapes depending on state; we normalize it.
  */
-export function extractDnsRecordsFromConfig(domain: string, config: any) {
-  const records: Array<{ type: string; name: string; value: string; ttl?: number }> = [];
+export function extractDnsRecordsFromConfig(domain: string, cfg: any) {
+  const out: Array<{ type: string; name: string; value: string; ttl?: number }> = [];
 
-  // Common fields Vercel can return
-  const cnames = Array.isArray(config?.cnames) ? config.cnames : [];
-  for (const c of cnames) {
-    if (c?.name && c?.value) {
-      records.push({ type: "CNAME", name: String(c.name), value: String(c.value) });
-    }
-  }
+  const challenges = cfg?.conflicts || cfg?.configuration?.conflicts || [];
+  const records = cfg?.records || cfg?.configuration?.records || [];
 
-  // Apex A-values (often 76.76.21.21 for Vercel)
-  const aValues = Array.isArray(config?.aValues) ? config.aValues : [];
-  for (const v of aValues) {
-    records.push({ type: "A", name: "@", value: String(v) });
-  }
+  const add = (r: any) => {
+    const type = String(r?.type || r?.recordType || "").toUpperCase();
+    const name = String(r?.name || r?.host || "").trim();
+    const value = String(r?.value || r?.data || r?.target || "").trim();
+    const ttl = r?.ttl ? Number(r.ttl) : undefined;
+    if (type && name && value) out.push({ type, name, value, ttl });
+  };
 
-  // Sometimes Vercel returns an “expected” CNAME target
-  if (config?.recommendedCNAME?.name && config?.recommendedCNAME?.value) {
-    records.push({
-      type: "CNAME",
-      name: String(config.recommendedCNAME.name),
-      value: String(config.recommendedCNAME.value),
-    });
-  }
+  if (Array.isArray(records)) records.forEach(add);
+  if (Array.isArray(challenges)) challenges.forEach(add);
 
-  // If Vercel provides TXT verification (varies)
-  const verification = config?.verification;
-  if (verification?.type && verification?.domain && verification?.value) {
-    records.push({
-      type: String(verification.type).toUpperCase(),
-      name: String(verification.domain),
-      value: String(verification.value),
-    });
-  }
-
-  // Fallback if nothing extracted: show “check config” hint
-  if (records.length === 0) {
-    // Give something meaningful to UI so it doesn't look broken
-    records.push({
-      type: "INFO",
-      name: domain,
-      value: "Vercel did not return explicit DNS records. Use Verify/Refresh after adding the domain in your registrar.",
-    });
-  }
-
-  return records;
+  // As a fallback, Vercel sometimes tells you a "misconfigured" state without explicit records.
+  // We keep it empty in that case; UI will show "no records yet".
+  return out;
 }
+
