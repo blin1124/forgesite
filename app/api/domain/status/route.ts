@@ -1,36 +1,33 @@
+// app/api/domain/status/route.ts
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { getUserFromCookie, mustEnv, normalizeDomain, vercelFetch } from "../_lib";
 
 export const runtime = "nodejs";
 
-function jsonError(message: string, status = 500) {
-  return NextResponse.json({ error: message }, { status });
-}
-
 export async function GET(req: Request) {
   try {
-    const { searchParams } = new URL(req.url);
-    const domain = String(searchParams.get("domain") || "").trim().toLowerCase();
-    if (!domain) return jsonError("Missing domain query param", 400);
+    const user = await getUserFromCookie();
+    if (!user) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!supabaseUrl || !serviceKey) return jsonError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY", 500);
+    const url = new URL(req.url);
+    const domain = normalizeDomain(url.searchParams.get("domain") || "");
+    if (!domain) return NextResponse.json({ error: "Missing domain" }, { status: 400 });
 
-    const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
+    const projectId = mustEnv("VERCEL_PROJECT_ID");
 
-    const { data, error } = await supabase
-      .from("custom_domains")
-      .select("id,domain,status,verified,dns_records,last_error,created_at")
-      .eq("domain", domain)
-      .maybeSingle();
+    const info = await vercelFetch(`/v9/projects/${projectId}/domains/${encodeURIComponent(domain)}`, {
+      method: "GET",
+    });
 
-    if (error) return jsonError(error.message, 500);
+    if (!info.res.ok) {
+      throw new Error(info.json?.error?.message || `Vercel status failed (${info.res.status})`);
+    }
 
-    return NextResponse.json({ domain: data || null });
-  } catch (err: any) {
-    return jsonError(err?.message || "Status crashed", 500);
+    return NextResponse.json({ verification: info.json });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || "Status failed" }, { status: 500 });
   }
 }
+
 
 
