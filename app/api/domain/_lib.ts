@@ -139,5 +139,3 @@ export function extractDnsRecordsFromConfig(domain: string, config: any) {
 
   return records;
 }
-
-
