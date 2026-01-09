@@ -1,30 +1,25 @@
 import { NextResponse } from "next/server";
-import { getSupabaseAdmin, getUserIdFromRequest } from "../_lib";
+import { getUserIdFromAuthHeader, supabaseAdmin } from "../_lib";
 
 export const runtime = "nodejs";
 
-function jsonError(message: string, status = 500) {
-  return NextResponse.json({ error: message }, { status });
-}
-
 export async function GET(req: Request) {
   try {
-    const admin = getSupabaseAdmin();
-    const user_id = await getUserIdFromRequest(req);
+    const admin = supabaseAdmin();
+    const user_id = await getUserIdFromAuthHeader(admin, req);
+    if (!user_id) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
     const { data, error } = await admin
       .from("custom_domains")
-      .select("id,user_id,domain,status,verified,dns_records,created_at,updated_at,last_error")
+      .select("id, domain, status, verified, dns_records, verification, last_error, created_at, updated_at")
       .eq("user_id", user_id)
       .order("created_at", { ascending: false });
 
-    if (error) return jsonError(error.message, 500);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
     return NextResponse.json({ domains: data || [] });
   } catch (e: any) {
-    return jsonError(e?.message || "List failed", 500);
+    return NextResponse.json({ error: e?.message || "List failed" }, { status: 500 });
   }
 }
-
-
-
 
