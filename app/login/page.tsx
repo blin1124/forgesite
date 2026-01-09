@@ -1,13 +1,14 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
-export default function LoginPage() {
+function LoginInner() {
   const router = useRouter();
   const sp = useSearchParams();
 
+  // ✅ safe: computed from search params (client-only), and wrapped in Suspense
   const next = sp.get("next") || "/builder";
 
   const [email, setEmail] = useState<string>("");
@@ -26,7 +27,7 @@ export default function LoginPage() {
     })();
   }, []);
 
-  async function continueToApp() {
+  function continueToApp() {
     router.push(next);
   }
 
@@ -40,7 +41,6 @@ export default function LoginPage() {
       const supabase = createSupabaseBrowserClient();
       const origin = window.location.origin;
 
-      // ✅ Supabase OAuth: sends user to /auth/callback which exchanges the code for a session
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
@@ -105,17 +105,14 @@ export default function LoginPage() {
             <>
               <div style={{ fontSize: 20, fontWeight: 900 }}>Sign in</div>
               <div style={{ opacity: 0.9, marginTop: 6 }}>
-                Use Google to sign in. You’ll come back here automatically.
+                Use Google to sign in. You’ll come back automatically.
               </div>
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
                 <button style={primaryBtn} onClick={signInWithGoogle}>
                   Continue with Google →
                 </button>
-                <button
-                  style={secondaryBtn}
-                  onClick={() => router.push("/")}
-                >
+                <button style={secondaryBtn} onClick={() => router.push("/")}>
                   Back home
                 </button>
               </div>
@@ -145,6 +142,15 @@ export default function LoginPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+export default function LoginPage() {
+  // ✅ This prevents build/prerender crash with useSearchParams
+  return (
+    <Suspense fallback={<div style={{ minHeight: "100vh" }} />}>
+      <LoginInner />
+    </Suspense>
   );
 }
 
