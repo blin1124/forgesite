@@ -4,17 +4,16 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
-type DnsRecord = { type: string; name: string; value: string; ttl?: number };
-
 type DomainRow = {
   id: string;
   domain: string;
   status: string;
   verified: boolean;
-  dns_records: DnsRecord[] | null;
+  dns_records: any | null;
+  verification: any | null;
+  last_error: string | null;
   created_at: string;
   updated_at: string;
-  last_error?: string | null;
 };
 
 async function readResponse(res: Response) {
@@ -28,27 +27,12 @@ async function readResponse(res: Response) {
   return { text, json };
 }
 
-async function authedFetch(path: string, init?: RequestInit) {
-  const supabase = createSupabaseBrowserClient();
-  const { data } = await supabase.auth.getSession();
-  const token = data?.session?.access_token || "";
-
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      ...(init?.headers || {}),
-      authorization: `Bearer ${token}`,
-    },
-    cache: "no-store",
-  });
-
-  return res;
-}
-
 export default function Client() {
   const router = useRouter();
 
   const [email, setEmail] = useState("");
+  const [token, setToken] = useState<string>("");
+
   const [domains, setDomains] = useState<DomainRow[]>([]);
   const [selected, setSelected] = useState<DomainRow | null>(null);
 
@@ -56,39 +40,58 @@ export default function Client() {
   const [busy, setBusy] = useState("");
   const [debug, setDebug] = useState("");
 
-  const dnsRecords = useMemo(() => selected?.dns_records || [], [selected]);
+  const authHeaders = useMemo(() => {
+    const h: Record<string, string> = { "content-type": "application/json" };
+    if (token) h.authorization = `Bearer ${token}`;
+    return h;
+  }, [token]);
 
   useEffect(() => {
-    (async () => {
+    const run = async () => {
       try {
         const supabase = createSupabaseBrowserClient();
         const { data } = await supabase.auth.getSession();
-        setEmail(data?.session?.user?.email || "");
+        const session = data?.session;
+
+        setEmail(session?.user?.email || "");
+        setToken(session?.access_token || "");
       } catch {
         setEmail("");
+        setToken("");
       }
-      await refresh();
-    })();
+    };
+    run();
   }, []);
 
-  async function refresh() {
+  useEffect(() => {
+    if (token) refreshList();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  async function refreshList() {
     setBusy("");
     setDebug("");
     try {
-      const res = await authedFetch("/api/domain/list", { method: "GET" });
+      setBusy("Loading domains…");
+
+      const res = await fetch("/api/domain/list", { method: "GET", headers: token ? { authorization: `Bearer ${token}` } : {} });
       const { text, json } = await readResponse(res);
+
       if (!res.ok) throw new Error(json?.error || `List failed (${res.status}): ${text.slice(0, 240)}`);
 
-      const list: DomainRow[] = Array.isArray(json?.domains) ? json.domains : [];
+      const list = Array.isArray(json?.domains) ? json.domains : [];
       setDomains(list);
 
-      // keep selection in sync
+      // keep selection fresh
       if (selected) {
-        const found = list.find((d) => d.domain === selected.domain);
-        if (found) setSelected(found);
+        const next = list.find((d: DomainRow) => d.id === selected.id) || null;
+        setSelected(next);
       }
+
+      setBusy("");
     } catch (e: any) {
-      setDebug(e?.message || "Failed to load domains");
+      setBusy(e?.message || "List failed");
+      setDebug(String(e?.stack || ""));
     }
   }
 
@@ -96,30 +99,29 @@ export default function Client() {
     setBusy("");
     setDebug("");
 
-    const d = inputDomain.trim();
-    if (!d) return setBusy("Enter a domain first.");
+    if (!token) return setBusy("Not signed in.");
+    if (!inputDomain.trim()) return setBusy("Enter a domain first.");
 
     try {
-      setBusy("Requesting DNS records…");
+      setBusy("Provisioning domain + fetching DNS records…");
 
-      const res = await authedFetch("/api/domain/request", {
+      const res = await fetch("/api/domain/request", {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ domain: d }),
+        headers: authHeaders,
+        body: JSON.stringify({ domain: inputDomain.trim() }),
       });
 
       const { text, json } = await readResponse(res);
       if (!res.ok) throw new Error(json?.error || `Request failed (${res.status}): ${text.slice(0, 240)}`);
 
-      await refresh();
+      await refreshList();
 
-      const domainReturned = String(json?.domain || "");
-      if (domainReturned) {
-        const found = domains.find((x) => x.domain === domainReturned);
-        if (found) setSelected(found);
-      }
+      // select the domain we just requested
+      const d = (json?.domain || "").toLowerCase();
+      const found = domains.find((x) => x.domain.toLowerCase() === d) || null;
+      setSelected(found);
 
-      setBusy("DNS records loaded ✅");
+      setBusy("DNS records ready ✅");
       setTimeout(() => setBusy(""), 1200);
     } catch (e: any) {
       setBusy(e?.message || "Request failed");
@@ -131,58 +133,28 @@ export default function Client() {
     setBusy("");
     setDebug("");
 
+    if (!token) return setBusy("Not signed in.");
     const d = (selected?.domain || inputDomain || "").trim();
     if (!d) return setBusy("Enter/select a domain first.");
 
     try {
-      setBusy("Verifying…");
+      setBusy("Verifying with Vercel…");
 
-      const res = await authedFetch("/api/domain/connect", {
+      const res = await fetch("/api/domain/verify", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders,
         body: JSON.stringify({ domain: d }),
       });
 
       const { text, json } = await readResponse(res);
       if (!res.ok) throw new Error(json?.error || `Verify failed (${res.status}): ${text.slice(0, 240)}`);
 
-      await refresh();
+      await refreshList();
 
-      const verified = Boolean(json?.verified);
-      setBusy(verified ? "Verified ✅" : "Not verified yet — keep waiting for DNS to propagate.");
-      setTimeout(() => setBusy(""), 2200);
-    } catch (e: any) {
-      setBusy(e?.message || "Verify failed");
-      setDebug(String(e?.stack || ""));
-    }
-  }
-
-  async function refreshSelectedStatus() {
-    setBusy("");
-    setDebug("");
-
-    const d = (selected?.domain || inputDomain || "").trim();
-    if (!d) return setBusy("Enter/select a domain first.");
-
-    try {
-      setBusy("Refreshing status…");
-
-      const res = await authedFetch("/api/domain/status", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ domain: d }),
-      });
-
-      const { text, json } = await readResponse(res);
-      if (!res.ok) throw new Error(json?.error || `Status failed (${res.status}): ${text.slice(0, 240)}`);
-
-      await refresh();
-
-      const verified = Boolean(json?.verified);
-      setBusy(verified ? "Verified ✅" : "Still pending. DNS may need more time.");
+      setBusy(json?.verified ? "Verified ✅" : "Not verified yet (still pending).");
       setTimeout(() => setBusy(""), 1600);
     } catch (e: any) {
-      setBusy(e?.message || "Refresh failed");
+      setBusy(e?.message || "Verify failed");
       setDebug(String(e?.stack || ""));
     }
   }
@@ -190,12 +162,31 @@ export default function Client() {
   async function logout() {
     const supabase = createSupabaseBrowserClient();
     await supabase.auth.signOut();
-    router.push("/login?next=%2Fbuilder");
+    router.push("/login?next=%2Fdomain");
   }
 
+  const dnsText = useMemo(() => {
+    const rec = selected?.dns_records;
+    if (!rec) return "Enter a domain and click Get DNS records.";
+
+    // Pretty print
+    try {
+      return JSON.stringify(rec, null, 2);
+    } catch {
+      return String(rec);
+    }
+  }, [selected]);
+
+  const statusText = useMemo(() => {
+    if (!selected) return "No domain selected yet.";
+    if (selected.verified) return "✅ Verified";
+    if (selected.status === "error") return "❌ Error (see Debug)";
+    return "Pending verification…";
+  }, [selected]);
+
   return (
-    <main style={shell}>
-      <header style={header}>
+    <main style={page}>
+      <header style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
         <div>
           <div style={{ fontSize: 44, fontWeight: 900, lineHeight: 1 }}>Domain</div>
           <div style={{ opacity: 0.9 }}>
@@ -204,135 +195,105 @@ export default function Client() {
         </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button style={topBtn} onClick={() => router.push("/builder")}>
-            ← Back to Builder
-          </button>
-          <button style={topBtn} onClick={() => router.push("/billing")}>
-            Billing
-          </button>
-          <button style={topBtn} onClick={logout}>
-            Log out
-          </button>
+          <button style={topBtn} onClick={() => router.push("/builder")}>← Back to Builder</button>
+          <button style={topBtn} onClick={() => router.push("/billing")}>Billing</button>
+          <button style={topBtn} onClick={logout}>Log out</button>
         </div>
       </header>
 
-      <div style={{ display: "grid", gridTemplateColumns: "380px 1fr", gap: 14, marginTop: 14 }}>
-        {/* LEFT */}
+      <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", gap: 14, marginTop: 14 }}>
+        {/* LEFT: list */}
         <section style={card}>
           <div style={{ fontSize: 18, fontWeight: 900 }}>Your domains</div>
           <div style={{ opacity: 0.85, fontSize: 13, marginTop: 6 }}>{domains.length} domain(s)</div>
 
-          <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+          <button style={{ ...secondaryBtn, marginTop: 12 }} onClick={refreshList}>
+            Refresh list
+          </button>
+
+          <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+            {domains.length === 0 ? (
+              <div style={{ opacity: 0.8, fontSize: 13 }}>No domains saved yet.</div>
+            ) : null}
+
             {domains.map((d) => (
               <button
                 key={d.id}
-                style={{
-                  ...siteBtn,
-                  borderColor: selected?.domain === d.domain ? "rgba(255,255,255,0.65)" : "rgba(255,255,255,0.18)",
-                }}
                 onClick={() => {
                   setSelected(d);
                   setInputDomain(d.domain);
                   setDebug("");
                   setBusy("");
                 }}
+                style={{
+                  ...siteBtn,
+                  borderColor: selected?.id === d.id ? "rgba(255,255,255,0.65)" : "rgba(255,255,255,0.18)",
+                }}
               >
                 <div style={{ fontWeight: 900 }}>{d.domain}</div>
                 <div style={{ opacity: 0.85, fontSize: 12 }}>
-                  {d.verified ? "✅ verified" : `⏳ ${d.status || "pending"}`}
+                  {d.verified ? "Verified ✅" : d.status === "error" ? "Error ❌" : "Pending…"}
                 </div>
               </button>
             ))}
           </div>
-
-          <button style={{ ...secondaryBtn, marginTop: 12 }} onClick={refresh}>
-            Refresh list
-          </button>
         </section>
 
-        {/* RIGHT */}
+        {/* RIGHT: actions */}
         <section style={card}>
           <div style={{ fontSize: 24, fontWeight: 900 }}>Connect your custom domain</div>
           <div style={{ opacity: 0.9, marginTop: 6 }}>
-            Enter a domain you own (like <b>yourbusiness.com</b>). We’ll show DNS records to add in GoDaddy, IONOS,
-            Namecheap, etc — then we verify it.
+            Enter a domain you own (like <b>yourbusiness.com</b>). We’ll show DNS records to add in GoDaddy, IONOS, Namecheap, etc — then we verify it.
           </div>
 
           <div style={{ marginTop: 14 }}>
-            <div style={{ fontWeight: 900, marginBottom: 6 }}>Your domain</div>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 14, fontWeight: 900, opacity: 0.95 }}>Your domain</div>
+
+            <div style={{ display: "flex", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
               <input
                 value={inputDomain}
                 onChange={(e) => setInputDomain(e.target.value)}
                 placeholder="yourbusiness.com"
                 style={{ ...input, flex: 1, minWidth: 260 }}
               />
-              <button style={primaryBtn} onClick={getDnsRecords}>
-                Get DNS records
-              </button>
-              <button style={secondaryBtn} onClick={verifyNow}>
-                Verify now
-              </button>
-              <button style={secondaryBtn} onClick={refreshSelectedStatus}>
-                Refresh
-              </button>
+
+              <button style={primaryBtn} onClick={getDnsRecords}>Get DNS records</button>
+              <button style={secondaryBtn} onClick={verifyNow}>Verify now</button>
+              <button style={secondaryBtn} onClick={refreshList}>Refresh</button>
             </div>
           </div>
 
           <div style={{ marginTop: 14 }}>
-            <div style={{ fontWeight: 900 }}>Status</div>
-            <div style={{ opacity: 0.9, marginTop: 6 }}>
-              {selected ? (
-                <>
-                  <b>{selected.domain}</b> — {selected.verified ? "✅ Verified" : `⏳ ${selected.status || "pending"}`}
-                </>
-              ) : (
-                "No domain selected yet."
-              )}
+            <div style={{ fontSize: 14, fontWeight: 900, opacity: 0.95 }}>Status</div>
+            <div style={{ marginTop: 8, opacity: 0.92 }}>{statusText}</div>
+          </div>
+
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 14, fontWeight: 900, opacity: 0.95 }}>DNS records to add</div>
+            <div style={dnsBox}>
+              <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, opacity: 0.95 }}>{dnsText}</pre>
             </div>
           </div>
 
-          <div style={{ marginTop: 14, ...subcard }}>
-            <div style={{ fontWeight: 900 }}>DNS records to add</div>
-            <div style={{ opacity: 0.9, marginTop: 6 }}>
-              Add these records in your registrar’s DNS settings. After saving, come back and click <b>Verify now</b>.
-            </div>
-
-            <div style={{ marginTop: 10 }}>
-              {dnsRecords?.length ? (
-                <div style={{ display: "grid", gap: 8 }}>
-                  {dnsRecords.map((r, idx) => (
-                    <div key={idx} style={dnsRow}>
-                      <div style={{ fontWeight: 900, width: 70 }}>{r.type}</div>
-                      <div style={{ width: 180, opacity: 0.95, wordBreak: "break-all" }}>{r.name}</div>
-                      <div style={{ flex: 1, opacity: 0.95, wordBreak: "break-all" }}>{r.value}</div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div style={{ opacity: 0.85 }}>Enter a domain and click Get DNS records.</div>
-              )}
-            </div>
+          <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <a style={linkBtn} href="https://www.godaddy.com/" target="_blank" rel="noreferrer">Buy on GoDaddy →</a>
+            <a style={linkBtn} href="https://www.ionos.com/" target="_blank" rel="noreferrer">Buy on IONOS →</a>
+            <a style={linkBtn} href="https://www.namecheap.com/" target="_blank" rel="noreferrer">Buy on Namecheap →</a>
           </div>
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
-            <a style={linkBtn as any} href="https://www.godaddy.com/" target="_blank" rel="noreferrer">
-              Buy on GoDaddy →
-            </a>
-            <a style={linkBtn as any} href="https://www.ionos.com/" target="_blank" rel="noreferrer">
-              Buy on IONOS →
-            </a>
-            <a style={linkBtn as any} href="https://www.namecheap.com/" target="_blank" rel="noreferrer">
-              Buy on Namecheap →
-            </a>
-          </div>
+          {busy ? (
+            <div style={{ marginTop: 12, padding: 10, borderRadius: 12, background: "rgba(0,0,0,0.25)" }}>
+              {busy}
+            </div>
+          ) : null}
 
-          {busy ? <div style={{ marginTop: 14, ...toast }}>{busy}</div> : null}
-
-          {debug ? (
-            <div style={{ marginTop: 14, ...errorBox }}>
+          {(selected?.last_error || debug) ? (
+            <div style={{ marginTop: 12, padding: 10, borderRadius: 12, background: "rgba(185, 28, 28, .25)", border: "1px solid rgba(185, 28, 28, .5)" }}>
               <div style={{ fontWeight: 900 }}>Debug</div>
-              <div style={{ whiteSpace: "pre-wrap", fontSize: 12, opacity: 0.95 }}>{debug}</div>
+              <div style={{ whiteSpace: "pre-wrap", fontSize: 12, opacity: 0.95 }}>
+                {selected?.last_error ? `DB error: ${selected.last_error}\n\n` : ""}
+                {debug || ""}
+              </div>
             </div>
           ) : null}
         </section>
@@ -341,7 +302,7 @@ export default function Client() {
   );
 }
 
-const shell: React.CSSProperties = {
+const page: React.CSSProperties = {
   minHeight: "100vh",
   padding: 16,
   color: "white",
@@ -351,21 +312,12 @@ const shell: React.CSSProperties = {
     'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
 };
 
-const header: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 };
-
 const card: React.CSSProperties = {
   background: "rgba(255,255,255,0.12)",
   border: "1px solid rgba(255,255,255,0.18)",
   borderRadius: 16,
   padding: 14,
   boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
-};
-
-const subcard: React.CSSProperties = {
-  background: "rgba(0,0,0,0.12)",
-  border: "1px solid rgba(255,255,255,0.16)",
-  borderRadius: 14,
-  padding: 12,
 };
 
 const input: React.CSSProperties = {
@@ -407,14 +359,6 @@ const secondaryBtn: React.CSSProperties = {
   cursor: "pointer",
 };
 
-const linkBtn: React.CSSProperties = {
-  ...secondaryBtn,
-  textDecoration: "none",
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-};
-
 const siteBtn: React.CSSProperties = {
   textAlign: "left",
   padding: 12,
@@ -425,28 +369,23 @@ const siteBtn: React.CSSProperties = {
   cursor: "pointer",
 };
 
-const toast: React.CSSProperties = {
-  padding: 10,
+const dnsBox: React.CSSProperties = {
+  marginTop: 8,
+  padding: 12,
   borderRadius: 12,
-  background: "rgba(0,0,0,0.25)",
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(0,0,0,0.18)",
 };
 
-const errorBox: React.CSSProperties = {
-  padding: 10,
-  borderRadius: 12,
-  background: "rgba(185, 28, 28, .25)",
-  border: "1px solid rgba(185, 28, 28, .5)",
+const linkBtn: React.CSSProperties = {
+  ...secondaryBtn,
+  textDecoration: "none",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
 };
 
-const dnsRow: React.CSSProperties = {
-  display: "flex",
-  gap: 10,
-  alignItems: "flex-start",
-  padding: 10,
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.14)",
-  background: "rgba(255,255,255,0.08)",
-};
+
 
 
 
