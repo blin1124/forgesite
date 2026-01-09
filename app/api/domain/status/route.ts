@@ -1,33 +1,74 @@
-// app/api/domain/status/route.ts
 import { NextResponse } from "next/server";
-import { getUserFromCookie, mustEnv, normalizeDomain, vercelFetch } from "../_lib";
+import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-export async function GET(req: Request) {
+function jsonError(message: string, status = 500) {
+  return NextResponse.json({ error: message }, { status });
+}
+
+function getAdmin() {
+  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url) throw new Error("Missing env: SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)");
+  if (!service) throw new Error("Missing env: SUPABASE_SERVICE_ROLE_KEY");
+
+  return createClient(url, service, { auth: { persistSession: false } });
+}
+
+async function getUserIdFromAuthHeader(admin: ReturnType<typeof createClient>, req: Request) {
+  const auth = req.headers.get("authorization") || "";
+  const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
+  if (!token) throw new Error("Missing Authorization Bearer token.");
+
+  const { data, error } = await admin.auth.getUser(token);
+  if (error || !data?.user?.id) throw new Error("Invalid/expired session token.");
+  return data.user.id;
+}
+
+function normalizeDomain(input: string) {
+  return input.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+}
+
+export async function POST(req: Request) {
   try {
-    const user = await getUserFromCookie();
-    if (!user) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+    const admin = getAdmin();
+    const user_id = await getUserIdFromAuthHeader(admin, req);
 
-    const url = new URL(req.url);
-    const domain = normalizeDomain(url.searchParams.get("domain") || "");
-    if (!domain) return NextResponse.json({ error: "Missing domain" }, { status: 400 });
+    const body = await req.json().catch(() => ({}));
+    const domain = normalizeDomain(String(body?.domain || ""));
+    if (!domain) return jsonError("Missing domain", 400);
 
-    const projectId = mustEnv("VERCEL_PROJECT_ID");
+    const { data, error } = await admin
+      .from("custom_domains")
+      .select("id, domain, status, verified, dns_records, verification, created_at, updated_at")
+      .eq("user_id", user_id)
+      .eq("domain", domain)
+      .maybeSingle();
 
-    const info = await vercelFetch(`/v9/projects/${projectId}/domains/${encodeURIComponent(domain)}`, {
-      method: "GET",
-    });
+    if (error) return jsonError(error.message, 500);
 
-    if (!info.res.ok) {
-      throw new Error(info.json?.error?.message || `Vercel status failed (${info.res.status})`);
+    if (!data) {
+      return NextResponse.json({
+        status: "not_found",
+        verified: false,
+        message: "Domain not found. Click Get DNS records first.",
+      });
     }
 
-    return NextResponse.json({ verification: info.json });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Status failed" }, { status: 500 });
+    return NextResponse.json({
+      status: data.status || "pending",
+      verified: !!data.verified,
+      dns_records: data.dns_records || null,
+      verification: data.verification || null,
+      domain: data.domain,
+    });
+  } catch (err: any) {
+    return jsonError(err?.message || "Status failed", 500);
   }
 }
+
 
 
 
