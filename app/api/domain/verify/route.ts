@@ -1,44 +1,71 @@
 import { NextResponse } from "next/server";
-import { getUserFromCookie, mustEnv, normalizeDomain, supabaseAdmin, vercelFetch } from "../_lib";
+import {
+  setRequestContext,
+  clearRequestContext,
+  getUserFromCookie,
+  mustEnv,
+  normalizeDomain,
+  supabaseAdmin,
+  vercelFetch,
+  extractDnsRecordsFromConfig,
+  getVercelProjectId,
+} from "../_lib";
 
 export const runtime = "nodejs";
 
+function jsonError(message: string, status = 400) {
+  return NextResponse.json({ error: message }, { status });
+}
+
 export async function POST(req: Request) {
+  setRequestContext(req);
   try {
     const user = await getUserFromCookie();
-    if (!user) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+    if (!user) return jsonError("Not signed in", 401);
 
     const body = await req.json().catch(() => ({}));
     const domain = normalizeDomain(String(body?.domain || ""));
-    if (!domain) return NextResponse.json({ error: "Missing domain" }, { status: 400 });
+    if (!domain) return jsonError("Missing domain", 400);
 
-    const projectId = mustEnv("VERCEL_PROJECT_ID");
+    // Ensure env exists
+    mustEnv("VERCEL_TOKEN");
+    const projectId = getVercelProjectId();
 
-    // Some Vercel flows re-check automatically; we just refetch status
-    const info = await vercelFetch(`/v9/projects/${projectId}/domains/${encodeURIComponent(domain)}`, {
+    // Ask Vercel for domain config (DNS records / status)
+    const { res, json, text } = await vercelFetch(`/v9/projects/${projectId}/domains/${encodeURIComponent(domain)}/config`, {
       method: "GET",
     });
 
-    if (!info.res.ok) {
-      throw new Error(info.json?.error?.message || `Vercel verify check failed (${info.res.status})`);
+    if (!res.ok) {
+      return jsonError(json?.error?.message || `Vercel config failed (${res.status}): ${text.slice(0, 240)}`, 500);
     }
 
-    const verification = info.json || {};
-    const status = verification?.verified ? "verified" : "awaiting_dns";
+    const records = extractDnsRecordsFromConfig(domain, json);
 
-    const db = supabaseAdmin();
-    await db
+    // Save latest snapshot for the user+domain (optional but useful)
+    // You can remove this if your schema differs.
+    await supabaseAdmin
       .from("custom_domains")
       .update({
-        status,
-        verification,
-        last_error: null,
-      })
+        // keep flexible — only update if columns exist in your schema
+        last_checked_at: new Date().toISOString(),
+        // store DNS records snapshot if you have a jsonb column named dns_records
+        dns_records: records as any,
+      } as any)
       .eq("user_id", user.id)
       .eq("domain", domain);
 
-    return NextResponse.json({ status, verification });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Verify failed" }, { status: 500 });
+    return NextResponse.json({
+      ok: true,
+      domain,
+      records,
+      raw: json, // keep for debugging
+    });
+  } catch (err: any) {
+    return jsonError(err?.message || "Verify route crashed", 500);
+  } finally {
+    clearRequestContext();
   }
 }
+
+
