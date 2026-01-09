@@ -1,76 +1,83 @@
 import { NextResponse } from "next/server";
-import {
-  getUserFromCookie,
-  isLikelyDomain,
-  normalizeDomain,
-  mustEnv,
-  supabaseAdmin,
-  vercelFetch,
-} from "../_lib";
+import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
+function jsonError(message: string, status = 500, extra?: any) {
+  return NextResponse.json({ error: message, ...(extra ? { extra } : {}) }, { status });
+}
+
+function getAdmin() {
+  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url) throw new Error("Missing env: SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)");
+  if (!service) throw new Error("Missing env: SUPABASE_SERVICE_ROLE_KEY");
+
+  return createClient(url, service, { auth: { persistSession: false } });
+}
+
+async function getUserIdFromAuthHeader(admin: ReturnType<typeof createClient>, req: Request) {
+  const auth = req.headers.get("authorization") || "";
+  const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
+  if (!token) throw new Error("Missing Authorization Bearer token.");
+
+  const { data, error } = await admin.auth.getUser(token);
+  if (error || !data?.user?.id) throw new Error("Invalid/expired session token.");
+  return data.user.id;
+}
+
+function normalizeDomain(input: string) {
+  return input.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+}
+
 export async function POST(req: Request) {
   try {
-    const user = await getUserFromCookie();
-    if (!user) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+    const admin = getAdmin();
+    const user_id = await getUserIdFromAuthHeader(admin, req);
 
     const body = await req.json().catch(() => ({}));
-    const raw = String(body?.domain || "");
-    const domain = normalizeDomain(raw);
+    const domainRaw = String(body?.domain || "");
+    const domain = normalizeDomain(domainRaw);
 
-    if (!domain) return NextResponse.json({ error: "Missing domain" }, { status: 400 });
-    if (!isLikelyDomain(domain)) return NextResponse.json({ error: "Invalid domain" }, { status: 400 });
+    if (!domain || !domain.includes(".")) return jsonError("Enter a valid domain (example.com)", 400);
 
-    const projectId = mustEnv("VERCEL_PROJECT_ID");
+    // Placeholder DNS records until Step 6 (Vercel provisioning) is enabled.
+    const dns_records = [
+      { type: "CNAME", name: "www", value: "cname.vercel-dns.com", note: "recommended" },
+      { type: "A", name: "@", value: "76.76.21.21", note: "apex/root" },
+    ];
 
-    // 1) Add domain to project (auto-provision in Vercel)
-    const add = await vercelFetch(`/v10/projects/${projectId}/domains`, {
-      method: "POST",
-      body: JSON.stringify({ name: domain }),
-    });
-
-    // Vercel returns 409 if already added; treat as OK
-    if (!add.res.ok && add.res.status !== 409) {
-      throw new Error(add.json?.error?.message || `Vercel add failed (${add.res.status}): ${add.text.slice(0, 200)}`);
-    }
-
-    // 2) Get domain status + verification challenges
-    const info = await vercelFetch(`/v9/projects/${projectId}/domains/${encodeURIComponent(domain)}`, {
-      method: "GET",
-    });
-
-    if (!info.res.ok) {
-      throw new Error(info.json?.error?.message || `Vercel status failed (${info.res.status})`);
-    }
-
-    const verification = info.json || {};
-    const status = verification?.verified ? "verified" : "awaiting_dns";
-
-    // 3) Save in Supabase
-    const db = supabaseAdmin();
-    const { data, error } = await db
+    // Upsert by (user_id, domain)
+    const { data, error } = await admin
       .from("custom_domains")
       .upsert(
         {
-          user_id: user.id,
+          user_id,
           domain,
-          status,
-          verification,
-          last_error: null,
+          status: "pending",
+          verified: false,
+          dns_records,
+          updated_at: new Date().toISOString(),
         },
         { onConflict: "user_id,domain" }
       )
-      .select("id, domain, status, verification, created_at, updated_at")
+      .select("id, domain, status, verified, dns_records, created_at, updated_at")
       .single();
 
-    if (error) throw new Error(error.message);
+    if (error) return jsonError(error.message, 500);
 
-    return NextResponse.json({ domain: data });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Request failed" }, { status: 500 });
+    return NextResponse.json({
+      domain: data,
+      dns_records,
+      message: "DNS records generated. Add them in your registrar (GoDaddy/IONOS/Namecheap), then click Verify now.",
+    });
+  } catch (err: any) {
+    return jsonError(err?.message || "Request failed", 500);
   }
 }
+
+
 
 
 
