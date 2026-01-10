@@ -4,6 +4,46 @@ import React, { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 
+const card: React.CSSProperties = {
+  background: "rgba(255,255,255,0.08)",
+  border: "1px solid rgba(255,255,255,0.18)",
+  borderRadius: 18,
+  padding: 18,
+  boxShadow: "0 12px 40px rgba(0,0,0,0.18)",
+};
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.22)",
+  outline: "none",
+  background: "rgba(0,0,0,0.18)",
+  color: "white",
+  fontSize: 16,
+};
+
+const buttonStyle: React.CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.22)",
+  background: "rgba(255,255,255,0.9)",
+  color: "rgb(88,28,135)",
+  fontWeight: 900,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
+const buttonGhost: React.CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.22)",
+  background: "rgba(255,255,255,0.06)",
+  color: "white",
+  fontWeight: 800,
+  cursor: "pointer",
+};
+
 function LoginInner() {
   const router = useRouter();
   const sp = useSearchParams();
@@ -74,15 +114,13 @@ function LoginInner() {
       return;
     }
 
-    // IMPORTANT:
-    // If Supabase Email Confirmations are ON, signup will NOT create a session immediately.
-    // We handle both cases: attempt sign-in; if confirmations are required we show message.
     const origin = window.location.origin;
 
     const { error: signUpErr } = await supabase.auth.signUp({
       email: e,
       password,
       options: {
+        // if you have email confirmations ON, user must confirm before session exists
         emailRedirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next)}`,
       },
     });
@@ -93,7 +131,7 @@ function LoginInner() {
       return;
     }
 
-    // Try immediate sign-in (works if email confirmations are OFF)
+    // Try immediate sign-in (works if confirmations are OFF)
     setBusy("Signing in…");
     const { error: signInErr } = await supabase.auth.signInWithPassword({
       email: e,
@@ -106,7 +144,6 @@ function LoginInner() {
       return;
     }
 
-    // Confirmations are ON → no session until email confirmed
     setBusy("");
     setErrorMsg(
       "Account created. Check your email to confirm your account, then come back and sign in.\n\n" +
@@ -139,7 +176,93 @@ function LoginInner() {
         <section style={{ ...card, marginTop: 18 }}>
           <div style={{ fontSize: 20, fontWeight: 900 }}>
             {mode === "signin" ? "Sign in" : "Create account"}
-          </div
+          </div>
+          <div style={{ opacity: 0.9, marginTop: 6 }}>
+            Email + password only.
+          </div>
+
+          <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
+            <input
+              style={inputStyle}
+              placeholder="Email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+            <input
+              style={inputStyle}
+              placeholder="Password"
+              type="password"
+              autoComplete={mode === "signin" ? "current-password" : "new-password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+
+            {errorMsg ? (
+              <div
+                style={{
+                  background: "rgba(255,0,0,0.18)",
+                  border: "1px solid rgba(255,0,0,0.35)",
+                  padding: 12,
+                  borderRadius: 12,
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {errorMsg}
+              </div>
+            ) : null}
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {mode === "signin" ? (
+                <button
+                  style={buttonStyle}
+                  onClick={onSignIn}
+                  disabled={!!busy}
+                >
+                  {busy || "Sign in"}
+                </button>
+              ) : (
+                <button
+                  style={buttonStyle}
+                  onClick={onSignUp}
+                  disabled={!!busy}
+                >
+                  {busy || "Create account"}
+                </button>
+              )}
+
+              <button
+                style={buttonGhost}
+                onClick={() => setMode(mode === "signin" ? "signup" : "signin")}
+                disabled={!!busy}
+              >
+                {mode === "signin" ? "Need an account?" : "Have an account?"}
+              </button>
+
+              <button
+                style={buttonGhost}
+                onClick={() => router.replace("/")}
+                disabled={!!busy}
+              >
+                Back home
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+export default function Page() {
+  // useSearchParams requires Suspense in Next App Router
+  return (
+    <Suspense fallback={null}>
+      <LoginInner />
+    </Suspense>
+  );
+}
+
 
 
 
