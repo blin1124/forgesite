@@ -24,7 +24,7 @@ export default function LoginClient() {
       const supabase = createSupabaseBrowserClient();
 
       const { error } = await supabase.auth.signInWithPassword({
-        email,
+        email: email.trim().toLowerCase(),
         password,
       });
 
@@ -33,7 +33,7 @@ export default function LoginClient() {
         return;
       }
 
-      // IMPORTANT: cookie is now set, middleware can see user
+      // ✅ Cookie session gets set; middleware can now see the user
       router.replace(next);
     } catch (err: any) {
       setMsg(err?.message || "Login failed");
@@ -76,19 +76,22 @@ export default function LoginClient() {
           <input
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="email"
+            placeholder="Email"
             type="email"
             required
+            autoComplete="email"
             style={input}
           />
           <input
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="password"
+            placeholder="Password"
             type="password"
             required
+            autoComplete="current-password"
             style={input}
           />
+
           {msg ? (
             <div
               style={{
@@ -149,6 +152,8 @@ const secondaryBtn: React.CSSProperties = {
   fontWeight: 900,
   cursor: "pointer",
 };
+
+
 
 
 
