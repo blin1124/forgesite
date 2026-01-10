@@ -1,267 +1,153 @@
 "use client";
 
-import React, { Suspense, useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 
-const card: React.CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
-  border: "1px solid rgba(255,255,255,0.18)",
-  borderRadius: 18,
-  padding: 18,
-  boxShadow: "0 12px 40px rgba(0,0,0,0.18)",
-};
-
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.22)",
-  outline: "none",
-  background: "rgba(0,0,0,0.18)",
-  color: "white",
-  fontSize: 16,
-};
-
-const buttonStyle: React.CSSProperties = {
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.22)",
-  background: "rgba(255,255,255,0.9)",
-  color: "rgb(88,28,135)",
-  fontWeight: 900,
-  cursor: "pointer",
-  whiteSpace: "nowrap",
-};
-
-const buttonGhost: React.CSSProperties = {
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.22)",
-  background: "rgba(255,255,255,0.06)",
-  color: "white",
-  fontWeight: 800,
-  cursor: "pointer",
-};
-
-function LoginInner() {
+export default function LoginPage() {
+  const supabase = useMemo(() => createClientComponentClient(), []);
   const router = useRouter();
   const sp = useSearchParams();
   const next = sp.get("next") || "/builder";
 
-  const supabase = createClientComponentClient();
-
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const [busy, setBusy] = useState<string>("");
-  const [errorMsg, setErrorMsg] = useState<string>("");
-
-  // If already signed in, go straight to builder
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase.auth.getSession();
-      if (data?.session) router.replace(next);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function onSignIn() {
-    setBusy("Signing in…");
-    setErrorMsg("");
-
-    const e = email.trim();
-    if (!e) {
-      setBusy("");
-      setErrorMsg("Email is required.");
-      return;
-    }
-    if (!password) {
-      setBusy("");
-      setErrorMsg("Password is required.");
-      return;
-    }
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
 
     const { error } = await supabase.auth.signInWithPassword({
-      email: e,
+      email: email.trim(),
       password,
     });
 
     if (error) {
-      setBusy("");
-      setErrorMsg(error.message);
+      setError(error.message);
+      setBusy(false);
       return;
     }
 
-    setBusy("");
+    // go to builder
     router.replace(next);
-  }
-
-  async function onSignUp() {
-    setBusy("Creating account…");
-    setErrorMsg("");
-
-    const e = email.trim();
-    if (!e) {
-      setBusy("");
-      setErrorMsg("Email is required.");
-      return;
-    }
-    if (!password) {
-      setBusy("");
-      setErrorMsg("Password is required.");
-      return;
-    }
-
-    const origin = window.location.origin;
-
-    const { error: signUpErr } = await supabase.auth.signUp({
-      email: e,
-      password,
-      options: {
-        // if you have email confirmations ON, user must confirm before session exists
-        emailRedirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next)}`,
-      },
-    });
-
-    if (signUpErr) {
-      setBusy("");
-      setErrorMsg(signUpErr.message);
-      return;
-    }
-
-    // Try immediate sign-in (works if confirmations are OFF)
-    setBusy("Signing in…");
-    const { error: signInErr } = await supabase.auth.signInWithPassword({
-      email: e,
-      password,
-    });
-
-    if (!signInErr) {
-      setBusy("");
-      router.replace(next);
-      return;
-    }
-
-    setBusy("");
-    setErrorMsg(
-      "Account created. Check your email to confirm your account, then come back and sign in.\n\n" +
-        "If you want signup to go straight into the Builder, turn OFF email confirmations in Supabase → Auth → Providers → Email."
-    );
+    router.refresh();
   }
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        padding: 18,
-        color: "white",
-        background:
-          "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(124,58,237) 0%, rgb(109,40,217) 35%, rgb(91,33,182) 100%)",
-        fontFamily:
-          'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
-        display: "grid",
-        placeItems: "center",
-      }}
-    >
-      <div style={{ width: "min(920px, 100%)" }}>
-        <div style={{ fontSize: 62, fontWeight: 900, lineHeight: 1.05 }}>
-          ForgeSite
-        </div>
-        <div style={{ opacity: 0.9, marginTop: 8 }}>
-          Sign in to access the Builder.
-        </div>
+    <div style={styles.wrap}>
+      <div style={styles.card}>
+        <div style={styles.title}>ForgeSite</div>
+        <div style={styles.sub}>Sign in to access the Builder.</div>
 
-        <section style={{ ...card, marginTop: 18 }}>
-          <div style={{ fontSize: 20, fontWeight: 900 }}>
-            {mode === "signin" ? "Sign in" : "Create account"}
-          </div>
-          <div style={{ opacity: 0.9, marginTop: 6 }}>
-            Email + password only.
-          </div>
-
-          <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
+        <form onSubmit={onSubmit} style={{ marginTop: 16 }}>
+          <div style={{ display: "grid", gap: 10 }}>
             <input
-              style={inputStyle}
+              style={styles.input}
               placeholder="Email"
+              type="email"
               autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              required
             />
             <input
-              style={inputStyle}
+              style={styles.input}
               placeholder="Password"
               type="password"
-              autoComplete={mode === "signin" ? "current-password" : "new-password"}
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              required
             />
-
-            {errorMsg ? (
-              <div
-                style={{
-                  background: "rgba(255,0,0,0.18)",
-                  border: "1px solid rgba(255,0,0,0.35)",
-                  padding: 12,
-                  borderRadius: 12,
-                  whiteSpace: "pre-wrap",
-                }}
-              >
-                {errorMsg}
-              </div>
-            ) : null}
-
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              {mode === "signin" ? (
-                <button
-                  style={buttonStyle}
-                  onClick={onSignIn}
-                  disabled={!!busy}
-                >
-                  {busy || "Sign in"}
-                </button>
-              ) : (
-                <button
-                  style={buttonStyle}
-                  onClick={onSignUp}
-                  disabled={!!busy}
-                >
-                  {busy || "Create account"}
-                </button>
-              )}
-
-              <button
-                style={buttonGhost}
-                onClick={() => setMode(mode === "signin" ? "signup" : "signin")}
-                disabled={!!busy}
-              >
-                {mode === "signin" ? "Need an account?" : "Have an account?"}
-              </button>
-
-              <button
-                style={buttonGhost}
-                onClick={() => router.replace("/")}
-                disabled={!!busy}
-              >
-                Back home
-              </button>
-            </div>
           </div>
-        </section>
+
+          {error && (
+            <div style={styles.error}>
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+            <button type="submit" disabled={busy} style={styles.btnPrimary}>
+              {busy ? "Signing in..." : "Sign in"}
+            </button>
+
+            <a href="/signup" style={styles.btnSecondary}>
+              Need an account?
+            </a>
+
+            <a href="/" style={styles.btnSecondary}>
+              Back home
+            </a>
+          </div>
+        </form>
       </div>
-    </main>
+    </div>
   );
 }
 
-export default function Page() {
-  // useSearchParams requires Suspense in Next App Router
-  return (
-    <Suspense fallback={null}>
-      <LoginInner />
-    </Suspense>
-  );
-}
+const styles: Record<string, React.CSSProperties> = {
+  wrap: {
+    minHeight: "100vh",
+    display: "grid",
+    placeItems: "center",
+    padding: 18,
+    background:
+      "radial-gradient(1200px 600px at 30% 20%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, #6b2bd8, #4b1aa6)",
+  },
+  card: {
+    width: "min(760px, 100%)",
+    borderRadius: 18,
+    padding: 22,
+    background: "rgba(255,255,255,0.12)",
+    border: "1px solid rgba(255,255,255,0.16)",
+    boxShadow: "0 18px 60px rgba(0,0,0,0.25)",
+    color: "white",
+  },
+  title: { fontSize: 56, fontWeight: 900, lineHeight: 1 },
+  sub: { opacity: 0.9, marginTop: 6 },
+  input: {
+    width: "100%",
+    padding: "14px 14px",
+    borderRadius: 12,
+    border: "1px solid rgba(255,255,255,0.20)",
+    background: "rgba(0,0,0,0.16)",
+    color: "white",
+    outline: "none",
+  },
+  btnPrimary: {
+    padding: "12px 14px",
+    borderRadius: 12,
+    border: 0,
+    background: "rgba(255,255,255,0.92)",
+    color: "#3a0d88",
+    fontWeight: 800,
+    cursor: "pointer",
+  },
+  btnSecondary: {
+    padding: "12px 14px",
+    borderRadius: 12,
+    border: "1px solid rgba(255,255,255,0.22)",
+    background: "rgba(255,255,255,0.12)",
+    color: "white",
+    fontWeight: 700,
+    textDecoration: "none",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  error: {
+    marginTop: 12,
+    padding: 10,
+    borderRadius: 12,
+    background: "rgba(255,0,0,0.18)",
+    border: "1px solid rgba(255,0,0,0.25)",
+  },
+};
+
 
 
 
