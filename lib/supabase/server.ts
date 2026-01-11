@@ -1,36 +1,26 @@
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
-import type { SupabaseClient } from "@supabase/supabase-js";
 
-function makeClient(): SupabaseClient {
+export function createSupabaseServerClient() {
+  const cookieStore = cookies();
+
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-  if (!url || !anon) throw new Error("Missing Supabase env vars");
-
-  const cookieStore = cookies();
 
   return createServerClient(url, anon, {
     cookies: {
-      get(name: string) {
-        return cookieStore.get(name)?.value;
+      getAll() {
+        return cookieStore.getAll();
       },
-      set(name: string, value: string, options: any) {
-        cookieStore.set({ name, value, ...options });
-      },
-      remove(name: string, options: any) {
-        cookieStore.set({ name, value: "", ...options });
+      setAll(cookiesToSet) {
+        // next/headers cookies() is mutable in Route Handlers & Server Actions,
+        // and will correctly write Set-Cookie headers when applicable.
+        cookiesToSet.forEach(({ name, value, options }) => {
+          cookieStore.set(name, value, options);
+        });
       },
     },
   });
-}
-
-// ✅ Export BOTH names so ANY file you already have will work
-export function supabaseServer() {
-  return makeClient();
-}
-
-export function createSupabaseServerClient() {
-  return makeClient();
 }
 
 
