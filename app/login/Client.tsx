@@ -1,21 +1,15 @@
+// app/login/Client.tsx
 "use client";
 
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
-
-function getSupabase() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-  if (!url || !anon) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
-  return createClient(url, anon);
-}
+import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 export default function LoginClient() {
   const router = useRouter();
   const sp = useSearchParams();
 
-  const next = useMemo(() => sp.get("next") || "/billing", [sp]);
+  const next = useMemo(() => sp.get("next") || "/builder", [sp]);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -26,17 +20,19 @@ export default function LoginClient() {
     setError("");
     setBusy(true);
     try {
-      const supabase = getSupabase();
+      const supabase = createSupabaseBrowserClient();
 
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       });
 
       if (error) throw new Error(error.message);
+      if (!data.session) throw new Error("No session returned. Login failed.");
 
-      // IMPORTANT: even after login, we still send them to billing first
-      router.push(next || "/billing");
+      // IMPORTANT: replace + refresh so middleware/server sees the new auth state
+      router.replace(next || "/builder");
+      router.refresh();
     } catch (e: any) {
       setError(e?.message || "Login failed");
     } finally {
@@ -154,6 +150,7 @@ const buttonStyle: React.CSSProperties = {
   fontWeight: 900,
   cursor: "pointer",
 };
+
 
 
 
