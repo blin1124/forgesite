@@ -2,22 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
-
-function getSupabase() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-  if (!url || !anon) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
-
-  return createClient(url, anon, {
-    auth: {
-      persistSession: true,
-      autoRefreshToken: true,
-      detectSessionInUrl: true,
-      storageKey: "sb-auth",
-    },
-  });
-}
+import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 export default function LoginClient() {
   const router = useRouter();
@@ -37,43 +22,33 @@ export default function LoginClient() {
     setBusy(true);
 
     try {
-      const supabase = getSupabase();
+      const supabase = createSupabaseBrowserClient();
 
       setDebug("Signing in…");
 
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const { error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       });
 
-      if (error) {
-        throw new Error(error.message);
-      }
+      if (error) throw new Error(error.message);
 
-      // Safety: confirm session exists
-      const session = data?.session;
-      if (!session?.access_token) {
-        // Sometimes signIn returns no session if something is off
-        const { data: s2 } = await supabase.auth.getSession();
-        if (!s2?.session?.access_token) {
-          throw new Error("Signed in but no session returned. Check Supabase Auth settings / email confirmation.");
-        }
+      // Confirm we now have a session (cookie-based)
+      const { data: s } = await supabase.auth.getSession();
+      if (!s?.session?.access_token) {
+        throw new Error("Login succeeded but no session found. Cookie/session not set.");
       }
 
       setDebug(`Signed in. Redirecting to ${next}…`);
 
-      // Try Next navigation first
+      // Try Next router first
       router.replace(next);
       router.refresh();
 
-      // Hard redirect fallback (kills “stays on login” forever)
+      // Hard redirect fallback — kills “stays on login” forever
       setTimeout(() => {
-        try {
-          window.location.assign(next);
-        } catch {
-          // ignore
-        }
-      }, 300);
+        window.location.assign(next);
+      }, 200);
     } catch (e: any) {
       setError(e?.message || "Login failed");
       setDebug("");
@@ -210,6 +185,7 @@ const buttonStyle: React.CSSProperties = {
   fontWeight: 900,
   cursor: "pointer",
 };
+
 
 
 
