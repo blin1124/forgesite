@@ -1,9 +1,23 @@
-// app/login/Client.tsx
 "use client";
 
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { createClient } from "@supabase/supabase-js";
+
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+  if (!url || !anon) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
+
+  return createClient(url, anon, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      storageKey: "sb-auth",
+    },
+  });
+}
 
 export default function LoginClient() {
   const router = useRouter();
@@ -15,26 +29,54 @@ export default function LoginClient() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [debug, setDebug] = useState("");
 
   async function onLogin() {
     setError("");
+    setDebug("");
     setBusy(true);
+
     try {
-      const supabase = createSupabaseBrowserClient();
+      const supabase = getSupabase();
+
+      setDebug("Signing in…");
 
       const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       });
 
-      if (error) throw new Error(error.message);
-      if (!data.session) throw new Error("No session returned. Login failed.");
+      if (error) {
+        throw new Error(error.message);
+      }
 
-      // IMPORTANT: replace + refresh so middleware/server sees the new auth state
-      router.replace(next || "/builder");
+      // Safety: confirm session exists
+      const session = data?.session;
+      if (!session?.access_token) {
+        // Sometimes signIn returns no session if something is off
+        const { data: s2 } = await supabase.auth.getSession();
+        if (!s2?.session?.access_token) {
+          throw new Error("Signed in but no session returned. Check Supabase Auth settings / email confirmation.");
+        }
+      }
+
+      setDebug(`Signed in. Redirecting to ${next}…`);
+
+      // Try Next navigation first
+      router.replace(next);
       router.refresh();
+
+      // Hard redirect fallback (kills “stays on login” forever)
+      setTimeout(() => {
+        try {
+          window.location.assign(next);
+        } catch {
+          // ignore
+        }
+      }, 300);
     } catch (e: any) {
       setError(e?.message || "Login failed");
+      setDebug("");
     } finally {
       setBusy(false);
     }
@@ -75,9 +117,27 @@ export default function LoginClient() {
               borderRadius: 12,
               background: "rgba(185, 28, 28, .25)",
               border: "1px solid rgba(185, 28, 28, .5)",
+              whiteSpace: "pre-wrap",
             }}
           >
             {error}
+          </div>
+        ) : null}
+
+        {debug ? (
+          <div
+            style={{
+              marginTop: 12,
+              padding: 10,
+              borderRadius: 12,
+              background: "rgba(255,255,255,0.08)",
+              border: "1px solid rgba(255,255,255,0.14)",
+              fontSize: 13,
+              opacity: 0.9,
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {debug}
           </div>
         ) : null}
 
@@ -150,6 +210,7 @@ const buttonStyle: React.CSSProperties = {
   fontWeight: 900,
   cursor: "pointer",
 };
+
 
 
 
