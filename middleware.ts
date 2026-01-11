@@ -1,3 +1,4 @@
+// middleware.ts
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
@@ -10,44 +11,38 @@ function isActive(status: string | null | undefined) {
 }
 
 export async function middleware(req: NextRequest) {
-  // IMPORTANT: create a response we can attach cookies to
   const res = NextResponse.next();
+  const { pathname, search } = req.nextUrl;
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  // Hard fail if env is missing (prevents silent “always logged out”)
-  if (!supabaseUrl || !supabaseAnon) {
-    return NextResponse.next();
-  }
+  // If env is missing, don't hard-crash middleware — just let request through
+  if (!url || !anon) return res;
 
-  const supabase = createServerClient(supabaseUrl, supabaseAnon, {
+  const supabase = createServerClient(url, anon, {
     cookies: {
       getAll() {
         return req.cookies.getAll();
       },
       setAll(cookiesToSet) {
-        cookiesToSet.forEach(({ name, value, options }) => {
-          res.cookies.set(name, value, options);
-        });
+        cookiesToSet.forEach(({ name, value, options }) => res.cookies.set(name, value, options));
       },
     },
   });
 
-  const { pathname, search } = req.nextUrl;
-  const nextParam = encodeURIComponent(pathname + (search || ""));
-
-  // ✅ This is the key: refresh session on the server using cookies
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
+  const nextParam = encodeURIComponent(pathname + (search || ""));
+
   // Not logged in -> login
   if (!user) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/login";
-    url.search = `?next=${nextParam}`;
-    return NextResponse.redirect(url);
+    const redirect = req.nextUrl.clone();
+    redirect.pathname = "/login";
+    redirect.search = `?next=${nextParam}`;
+    return NextResponse.redirect(redirect);
   }
 
   // Logged in -> must have active entitlement
@@ -58,16 +53,14 @@ export async function middleware(req: NextRequest) {
     .maybeSingle();
 
   if (error || !ent || !isActive(ent.status)) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/billing";
-    url.search = `?next=${nextParam}`;
-    return NextResponse.redirect(url);
+    const redirect = req.nextUrl.clone();
+    redirect.pathname = "/billing";
+    redirect.search = `?next=${nextParam}`;
+    return NextResponse.redirect(redirect);
   }
 
-  // ✅ Return the response that has any refreshed cookies set
   return res;
 }
-
 
 
 
