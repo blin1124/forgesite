@@ -1,81 +1,47 @@
 "use client";
 
-export const dynamic = "force-dynamic";
+import { useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { createClient } from "@supabase/supabase-js";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+  if (!url || !anon) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
+  return createClient(url, anon);
+}
 
-export default function LoginPage() {
+export default function LoginClient() {
   const router = useRouter();
+  const sp = useSearchParams();
 
-  const [hydrated, setHydrated] = useState(false);
-  const [nextUrl, setNextUrl] = useState("/builder");
+  const next = useMemo(() => sp.get("next") || "/billing", [sp]);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState("");
 
-  // Hydration-only: read query params from window, then check session
-  useEffect(() => {
-    setHydrated(true);
-
-    // Read ?next= from the browser URL (NOT during prerender)
-    const sp = new URLSearchParams(window.location.search);
-    const n = sp.get("next");
-    if (n) setNextUrl(n);
-
-    (async () => {
-      const supabase = createSupabaseBrowserClient();
-      const { data } = await supabase.auth.getSession();
-      if (data.session) {
-        router.replace(n || "/builder");
-        router.refresh();
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setMsg(null);
+  async function onLogin() {
+    setError("");
     setBusy(true);
-
     try {
-      const supabase = createSupabaseBrowserClient();
+      const supabase = getSupabase();
+
       const { error } = await supabase.auth.signInWithPassword({
-        email,
+        email: email.trim(),
         password,
       });
 
-      if (error) {
-        setMsg(error.message);
-        return;
-      }
+      if (error) throw new Error(error.message);
 
-      router.replace(nextUrl || "/builder");
-      router.refresh();
+      // IMPORTANT: even after login, we still send them to billing first
+      router.push(next || "/billing");
+    } catch (e: any) {
+      setError(e?.message || "Login failed");
     } finally {
       setBusy(false);
     }
-  }
-
-  // Prevent any SSR/prerender logic from running Supabase code
-  if (!hydrated) {
-    return (
-      <main
-        style={{
-          minHeight: "100vh",
-          display: "grid",
-          placeItems: "center",
-          background:
-            "radial-gradient(1200px 600px at 50% 20%, #8b5cf6 0%, #5b21b6 55%, #3b0764 100%)",
-        }}
-      >
-        <div style={{ color: "white", fontWeight: 800 }}>Loading…</div>
-      </main>
-    );
   }
 
   return (
@@ -84,90 +50,85 @@ export default function LoginPage() {
         minHeight: "100vh",
         display: "grid",
         placeItems: "center",
+        padding: 24,
+        color: "white",
         background:
-          "radial-gradient(1200px 600px at 50% 20%, #8b5cf6 0%, #5b21b6 55%, #3b0764 100%)",
-        padding: 18,
+          "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(17,24,39) 0%, rgb(0,0,0) 55%, rgb(31,41,55) 100%)",
+        fontFamily:
+          'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
       }}
     >
-      <div style={{ width: "min(920px, 96vw)" }}>
-        <h1 style={{ color: "white", fontSize: 64, margin: 0, fontWeight: 900 }}>
-          ForgeSite
-        </h1>
-        <p style={{ color: "rgba(255,255,255,.85)", marginTop: 6 }}>
-          Sign in to access the Builder.
-        </p>
+      <div
+        style={{
+          width: "min(520px, 92vw)",
+          background: "rgba(255,255,255,0.10)",
+          border: "1px solid rgba(255,255,255,0.18)",
+          borderRadius: 16,
+          padding: 18,
+          boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+        }}
+      >
+        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 900 }}>Log in to ForgeSite</h1>
+        <p style={{ marginTop: 8, opacity: 0.85 }}>Continue to: {next}</p>
 
-        <div
-          style={{
-            marginTop: 18,
-            borderRadius: 16,
-            background: "rgba(255,255,255,.08)",
-            border: "1px solid rgba(255,255,255,.12)",
-            padding: 18,
-            boxShadow: "0 10px 40px rgba(0,0,0,.25)",
-            maxWidth: 760,
-          }}
-        >
-          <div style={{ color: "white", fontWeight: 800, fontSize: 26 }}>
-            Sign in
+        {error ? (
+          <div
+            style={{
+              marginTop: 12,
+              padding: 12,
+              borderRadius: 12,
+              background: "rgba(185, 28, 28, .25)",
+              border: "1px solid rgba(185, 28, 28, .5)",
+            }}
+          >
+            {error}
           </div>
-          <div style={{ color: "rgba(255,255,255,.8)", marginTop: 4 }}>
-            Email + password only.
-          </div>
+        ) : null}
 
-          <form onSubmit={onSubmit} style={{ marginTop: 14 }}>
-            <input
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              autoComplete="email"
-              style={inputStyle}
-            />
-            <input
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Password"
-              type="password"
-              autoComplete="current-password"
-              style={{ ...inputStyle, marginTop: 10 }}
-            />
+        <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+          <input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Email"
+            style={inputStyle}
+            autoComplete="email"
+          />
+          <input
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            type="password"
+            style={inputStyle}
+            autoComplete="current-password"
+          />
 
-            {msg && (
-              <div style={{ marginTop: 10, color: "#fecaca" }}>{msg}</div>
-            )}
+          <button
+            onClick={onLogin}
+            disabled={busy || !email.trim() || password.length < 6}
+            style={{
+              ...buttonStyle,
+              opacity: busy || !email.trim() || password.length < 6 ? 0.6 : 1,
+              background: "rgba(16,185,129,0.80)",
+              border: "1px solid rgba(16,185,129,0.65)",
+              color: "black",
+            }}
+          >
+            {busy ? "Logging in…" : "Log in"}
+          </button>
 
-            <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
-              <button disabled={busy} style={primaryBtn}>
-                {busy ? "Signing in..." : "Sign in"}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => router.push("/signup")}
-                style={secondaryBtn}
-              >
-                Need an account?
-              </button>
-
-              <button
-                type="button"
-                onClick={() => router.push("/")}
-                style={secondaryBtn}
-              >
-                Back home
-              </button>
-            </div>
-
-            <div
-              style={{
-                marginTop: 10,
-                color: "rgba(255,255,255,.75)",
-                fontSize: 13,
-              }}
-            >
-              After sign-in you’ll go to: <b>{nextUrl}</b>
-            </div>
-          </form>
+          <a
+            href={`/signup?next=${encodeURIComponent(next)}`}
+            style={{
+              textAlign: "center",
+              marginTop: 6,
+              color: "white",
+              opacity: 0.9,
+              textDecoration: "underline",
+              fontSize: 13,
+            }}
+          >
+            Need an account? Create one
+          </a>
         </div>
       </div>
     </main>
@@ -176,32 +137,21 @@ export default function LoginPage() {
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
+  padding: "12px 12px",
   borderRadius: 12,
-  border: "1px solid rgba(255,255,255,.16)",
-  background: "rgba(0,0,0,.15)",
-  color: "white",
-  padding: "12px 14px",
-  fontSize: 16,
+  border: "1px solid rgba(255,255,255,0.18)",
   outline: "none",
-};
-
-const primaryBtn: React.CSSProperties = {
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,.20)",
-  background: "rgba(255,255,255,.92)",
-  color: "#3b0764",
-  padding: "10px 14px",
-  fontWeight: 800,
-  cursor: "pointer",
-};
-
-const secondaryBtn: React.CSSProperties = {
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,.18)",
-  background: "rgba(255,255,255,.08)",
+  background: "rgba(0,0,0,0.25)",
   color: "white",
-  padding: "10px 14px",
-  fontWeight: 700,
+};
+
+const buttonStyle: React.CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(255,255,255,0.14)",
+  color: "white",
+  fontWeight: 900,
   cursor: "pointer",
 };
 
