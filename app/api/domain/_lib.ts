@@ -1,4 +1,3 @@
-// app/api/domain/_lib.ts
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
@@ -162,5 +161,6 @@ export function jsonOk(body: any) {
 export function jsonErr(msg: string, status = 400) {
   return NextResponse.json({ error: msg }, { status });
 }
+
 
 
