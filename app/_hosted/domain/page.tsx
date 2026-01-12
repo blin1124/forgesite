@@ -1,4 +1,3 @@
-// app/_hosted/domain/page.tsx
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
@@ -56,3 +55,5 @@ export default async function HostedCustomDomainPage({
     </html>
   );
 }
+
+
