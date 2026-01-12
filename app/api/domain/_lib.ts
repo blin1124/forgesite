@@ -1,81 +1,87 @@
 import { NextResponse } from "next/server";
-import { getSupabaseAdmin } from "@/lib/supabase/admin";
-
-export const runtime = "nodejs";
-
-/**
- * Small shared helpers for domain routes.
- * Goal: stable exports so routes stop breaking.
- */
-
-export function jsonOk(data: any = {}, status = 200) {
-  return NextResponse.json(data, { status });
-}
+import { supabaseAdmin as _supabaseAdmin } from "@/lib/supabase/admin";
 
 export function jsonErr(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
 
+export function jsonOk(data: any) {
+  return NextResponse.json(data);
+}
+
 export function mustEnv(name: string) {
   const v = process.env[name];
-  if (!v) throw new Error(`Missing env: ${name}`);
+  if (!v) throw new Error(`Missing env var: ${name}`);
   return v;
 }
 
 export function normalizeDomain(input: string) {
-  return String(input || "")
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\//, "")
-    .replace(/^www\./, "")
-    .replace(/\/.*$/, "");
+  const raw = (input || "").trim().toLowerCase();
+
+  // strip protocol + path
+  const noProto = raw.replace(/^https?:\/\//, "").split("/")[0].trim();
+
+  // strip leading www. for normalization (optional; you can remove this if you want to allow www domains separately)
+  const d = noProto.replace(/^www\./, "");
+
+  // basic sanity
+  if (!d || d.length < 3) return "";
+  if (!d.includes(".")) return "";
+  if (/\s/.test(d)) return "";
+  if (!/^[a-z0-9.-]+$/.test(d)) return "";
+
+  return d;
 }
 
-/**
- * Backwards compatibility:
- * Some older routes may still import `supabaseAdmin`.
- * We expose it as a function that returns the admin client.
- */
+// Re-export admin client in the shape routes expect:
 export function supabaseAdmin() {
-  return getSupabaseAdmin();
+  return _supabaseAdmin();
 }
 
 /**
- * Reads Authorization: Bearer <supabase access token>
- * and returns the Supabase user id.
+ * Pull user id from Authorization Bearer token using service role auth.getUser(token)
+ * This is what your routes were trying to do under different helper names.
  */
-export async function requireUserId(req: Request) {
-  const authHeader = req.headers.get("authorization") || "";
-  const token = authHeader.startsWith("Bearer ")
-    ? authHeader.slice("Bearer ".length).trim()
+export async function getUserIdFromAuthHeader(req: Request) {
+  const auth = req.headers.get("authorization") || "";
+  const token = auth.toLowerCase().startsWith("bearer ")
+    ? auth.slice("Bearer ".length).trim()
     : "";
 
-  if (!token) throw new Error("Auth session missing");
+  if (!token) return null;
 
-  const admin = getSupabaseAdmin();
+  const admin = supabaseAdmin();
+  const { data, error } = await admin.auth.getUser(token);
+  if (error || !data?.user?.id) return null;
 
-  const { data: userData, error: userErr } = await admin.auth.getUser(token);
-  const user = userData?.user;
-
-  if (userErr || !user) throw new Error("Invalid session");
-
-  return user.id;
+  return data.user.id;
 }
 
 /**
- * Minimal Vercel fetch helper for domain endpoints.
+ * Hard requirement: must have a valid bearer token user id or throws.
+ */
+export async function requireUserId(req: Request) {
+  const uid = await getUserIdFromAuthHeader(req);
+  if (!uid) throw new Error("Not signed in");
+  return uid;
+}
+
+/**
+ * Minimal Vercel fetch wrapper.
+ * Requires VERCEL_TOKEN env.
  */
 export async function vercelFetch(path: string, init?: RequestInit) {
   const token = mustEnv("VERCEL_TOKEN");
-  const url = path.startsWith("http") ? path : `https://api.vercel.com${path}`;
+  const url = `https://api.vercel.com${path}`;
 
   const res = await fetch(url, {
     ...init,
     headers: {
-      ...(init?.headers || {}),
       authorization: `Bearer ${token}`,
       "content-type": "application/json",
+      ...(init?.headers || {}),
     },
+    cache: "no-store",
   });
 
   const text = await res.text();
@@ -88,6 +94,8 @@ export async function vercelFetch(path: string, init?: RequestInit) {
 
   return { res, text, json };
 }
+
+
 
 
 
