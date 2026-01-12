@@ -21,13 +21,10 @@ export function mustEnv(name: string) {
 }
 
 /** ---------- supabase admin ---------- */
-export function getSupabaseAdminClient() {
-  return getSupabaseAdmin();
-}
+export const supabaseAdmin = getSupabaseAdmin();
 
-/** Back-compat: some routes may import getSupabaseAdmin() */
-export function getSupabaseAdminCompat() {
-  return getSupabaseAdminClient();
+export function getSupabaseAdminClient() {
+  return supabaseAdmin;
 }
 
 /** ---------- auth helpers ---------- */
@@ -45,15 +42,13 @@ export async function getUserIdFromRequest(admin: SupabaseClient, req: Request):
   return data.user.id;
 }
 
-/** Alias some routes may still use */
+/** Back-compat aliases some routes may use */
 export async function getUserIdFromAuthHeader(admin: SupabaseClient, req: Request): Promise<string> {
   return getUserIdFromRequest(admin, req);
 }
 
-/** Preferred helper used by some routes */
 export async function requireUserId(req: Request): Promise<string> {
-  const admin = getSupabaseAdminClient();
-  return getUserIdFromRequest(admin, req);
+  return getUserIdFromRequest(supabaseAdmin, req);
 }
 
 /** ---------- domain helpers ---------- */
@@ -97,24 +92,17 @@ export function getProjectId() {
   return mustEnv("VERCEL_PROJECT_ID");
 }
 
-/** Alias some files might call */
+/** Alias name you used earlier */
 export function getVercelProjectId() {
   return getProjectId();
 }
 
 /**
- * ✅ IMPORTANT: Only ONE export with this name (no redefinition).
  * Extract DNS records Vercel says are required for verification.
  */
 export function extractDnsRecordsFromVercelDomain(vercelDomainJson: any) {
-  const out: Array<{
-    type: string;
-    name: string;
-    value: string;
-    reason?: string;
-  }> = [];
+  const out: Array<{ type: string; name: string; value: string; reason?: string }> = [];
 
-  // Vercel commonly returns `verification: [{type, domain, value, reason}]`
   const verification = vercelDomainJson?.verification;
   if (Array.isArray(verification)) {
     for (const v of verification) {
@@ -186,6 +174,8 @@ export async function upsertCustomDomain(args: {
   if (error) throw error;
   return data;
 }
+
+
 
 
 
