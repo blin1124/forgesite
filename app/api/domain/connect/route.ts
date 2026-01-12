@@ -1,114 +1,162 @@
 import { NextResponse } from "next/server";
 import {
-  extractDnsRecordsFromVercelDomain,
-  getSupabaseAdmin,
-  getUserIdFromRequest,
-  getVercelProjectId,
-  jsonErr,
+  requireUserId,
   normalizeDomain,
+  jsonErr,
+  jsonOk,
+  mustEnv,
   vercelFetch,
+  supabaseAdmin,
 } from "../_lib";
 
 export const runtime = "nodejs";
 
 /**
- * Connect a custom domain to a site_id, create/provision it in Vercel,
- * and return DNS records needed for verification.
+ * Connect a custom domain to the Vercel project and store the result in Supabase.
  *
- * Expected body: { domain: string, site_id: string }
- * Auth: Authorization: Bearer <supabase access token>
+ * Expects JSON body:
+ *  { domain: "example.com" }
+ *
+ * Auth:
+ *  Authorization: Bearer <supabase access token>
+ *
+ * Env required:
+ *  VERCEL_TOKEN
+ *  VERCEL_PROJECT_ID   (you gave: prj_lmTrFFCheO4cW9JfRlSraCqss4pN)
  */
+type VercelDomainResponse = {
+  name?: string;
+  apexName?: string;
+  verified?: boolean;
+  verification?: Array<{ type?: string; domain?: string; value?: string; reason?: string }>;
+  misconfigured?: boolean;
+  error?: { code?: string; message?: string };
+  [k: string]: any;
+};
+
+function extractDnsInstructions(domainResp: VercelDomainResponse, domain: string) {
+  // Vercel domain verify responses can include "verification" records for TXT
+  const txtRecords =
+    Array.isArray(domainResp.verification) && domainResp.verification.length
+      ? domainResp.verification
+          .filter((v) => (v?.type || "").toUpperCase() === "TXT" && v?.value)
+          .map((v) => ({
+            type: "TXT",
+            name: v.domain || `_vercel.${domain}`,
+            value: String(v.value),
+          }))
+      : [];
+
+  // CNAME for subdomain (if customer uses www.example.com)
+  // For apex domains (example.com), many providers require A record to 76.76.21.21
+  // We'll give both options as instructions.
+  const apexA = { type: "A", name: "@", value: "76.76.21.21" };
+  const wwwCname = { type: "CNAME", name: "www", value: "cname.vercel-dns.com" };
+
+  return { txtRecords, apexA, wwwCname };
+}
+
 export async function POST(req: Request) {
   try {
-    const admin = getSupabaseAdmin();
-    const user_id = await getUserIdFromRequest(admin, req);
-    if (!user_id) return jsonErr("Not signed in", 401);
+    // 1) Auth user (supabase token)
+    const user_id = await requireUserId(req);
 
+    // 2) Parse body
     const body = await req.json().catch(() => ({}));
     const rawDomain = String(body?.domain || "");
-    const site_id = String(body?.site_id || "");
-
     const domain = normalizeDomain(rawDomain);
-    if (!domain) return jsonErr("Missing domain", 400);
-    if (!site_id) return jsonErr("Missing site_id", 400);
 
-    // 1) upsert in DB as "pending"
-    const now = new Date().toISOString();
+    if (!domain || domain.length < 3 || !domain.includes(".")) {
+      return jsonErr("Please enter a valid domain (example.com).", 400);
+    }
 
-    // NOTE: this requires a table custom_domains (schema below)
-    const { data: row, error: upErr } = await admin
+    // 3) Required env
+    const projectId = mustEnv("VERCEL_PROJECT_ID");
+
+    // 4) Upsert initial row in Supabase (status = pending)
+    const admin = supabaseAdmin();
+
+    // Store row first so UI can show it immediately
+    const { error: dbUpErr } = await admin.from("custom_domains").upsert(
+      {
+        user_id,
+        domain,
+        status: "pending",
+        updated_at: new Date().toISOString(),
+      } as any,
+      { onConflict: "user_id,domain" } as any
+    );
+
+    if (dbUpErr) return jsonErr(`DB error: ${dbUpErr.message}`, 500);
+
+    // 5) Add domain to Vercel project
+    // POST /v9/projects/{projectId}/domains
+    const add = await vercelFetch(`/v9/projects/${projectId}/domains`, {
+      method: "POST",
+      body: JSON.stringify({ name: domain }),
+    });
+
+    // If domain already exists, Vercel may return 409; treat as ok and continue
+    if (!add.res.ok && add.res.status !== 409) {
+      const msg = add.json?.error?.message || add.json?.message || add.text || "Vercel add domain failed";
+      await admin
+        .from("custom_domains")
+        .upsert(
+          { user_id, domain, status: "error", last_error: msg, updated_at: new Date().toISOString() } as any,
+          { onConflict: "user_id,domain" } as any
+        );
+      return jsonErr(msg, 500);
+    }
+
+    // 6) Fetch domain status from Vercel (includes verified + verification records)
+    // GET /v9/projects/{projectId}/domains/{domain}
+    const status = await vercelFetch(`/v9/projects/${projectId}/domains/${encodeURIComponent(domain)}`, {
+      method: "GET",
+    });
+
+    // If that fails, still return success but show generic instructions
+    const domainResp: VercelDomainResponse = status.json || {};
+
+    const verified = !!domainResp.verified;
+    const { txtRecords, apexA, wwwCname } = extractDnsInstructions(domainResp, domain);
+
+    // 7) Save status + dns instructions in Supabase
+    const nextStatus = verified ? "verified" : "needs_dns";
+
+    const { error: dbErr } = await admin
       .from("custom_domains")
       .upsert(
         {
           user_id,
           domain,
-          site_id,
-          status: "pending",
-          verified: false,
-          updated_at: now,
-        },
-        { onConflict: "domain" }
-      )
-      .select("*")
-      .single();
+          status: nextStatus,
+          vercel_verified: verified,
+          vercel_payload: domainResp,
+          dns_txt: txtRecords,
+          dns_apex: apexA,
+          dns_www: wwwCname,
+          updated_at: new Date().toISOString(),
+        } as any,
+        { onConflict: "user_id,domain" } as any
+      );
 
-    if (upErr) return jsonErr(`DB upsert failed: ${upErr.message}`, 500);
+    if (dbErr) return jsonErr(`DB error: ${dbErr.message}`, 500);
 
-    // 2) Provision in Vercel: attach domain to your ONE project
-    // Vercel docs: POST /v9/projects/:id/domains
-    const projectId = getVercelProjectId();
-
-    // Create/attach domain to project
-    // (If it already exists, Vercel may return an error; we tolerate by reading it after)
-    try {
-      await vercelFetch(`/v9/projects/${projectId}/domains`, {
-        method: "POST",
-        body: JSON.stringify({ name: domain }),
-      });
-    } catch (e: any) {
-      // If it already exists, ignore and continue; otherwise throw.
-      const msg = String(e?.message || "");
-      const already =
-        msg.toLowerCase().includes("already") ||
-        msg.toLowerCase().includes("exists") ||
-        msg.toLowerCase().includes("in use");
-      if (!already) throw e;
-    }
-
-    // 3) Fetch domain details to extract required DNS records
-    // GET /v9/projects/:id/domains/:domain
-    const domainJson = await vercelFetch(`/v9/projects/${projectId}/domains/${encodeURIComponent(domain)}`, {
-      method: "GET",
-    });
-
-    const dns_records = extractDnsRecordsFromVercelDomain(domainJson);
-
-    // 4) Save dns_records in DB for the UI
-    const { error: updErr } = await admin
-      .from("custom_domains")
-      .update({
-        dns_records,
-        status: "awaiting_dns",
-        updated_at: now,
-      })
-      .eq("domain", domain);
-
-    if (updErr) return jsonErr(`DB update failed: ${updErr.message}`, 500);
-
-    return NextResponse.json({
-      ok: true,
+    return jsonOk({
       domain,
-      site_id,
-      status: "awaiting_dns",
-      dns_records,
-      vercel: {
-        projectId,
+      status: nextStatus,
+      verified,
+      dns: {
+        txt: txtRecords,
+        apexA,
+        wwwCname,
       },
+      vercel: domainResp,
     });
-  } catch (err: any) {
-    console.error("DOMAIN_CONNECT_ERROR:", err);
-    return jsonErr(err?.message || "Domain connect failed", 500);
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || "Connect domain failed" }, { status: 500 });
   }
 }
+
 
 
