@@ -1,68 +1,66 @@
-import { createClient } from "@supabase/supabase-js";
+// app/api/domain/_lib.ts
+import { cookies } from "next/headers";
+import { NextResponse } from "next/server";
+import { createServerClient } from "@supabase/ssr";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 
-export const runtime = "nodejs";
-
-export function mustEnv(name: string) {
+export function mustEnv(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env: ${name}`);
   return v;
 }
 
-export function normalizeDomain(input: string) {
-  let d = (input || "").trim().toLowerCase();
+export function normalizeDomain(raw: string): string {
+  const d = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "")
+    .replace(/:\d+$/, "");
 
-  // remove protocol
-  d = d.replace(/^https?:\/\//, "");
-  // remove path/query
-  d = d.split("/")[0];
-  d = d.split("?")[0];
-  d = d.split("#")[0];
-
-  // remove leading www.
-  d = d.replace(/^www\./, "");
-
-  // basic safety
-  d = d.replace(/[^a-z0-9.-]/g, "");
-  d = d.replace(/\.\.+/g, ".");
-
+  // allow wildcard input too (for *.forgesite.net)
   return d;
 }
 
-export function supabaseAdmin() {
-  const url = mustEnv("SUPABASE_URL");
-  const key = mustEnv("SUPABASE_SERVICE_ROLE_KEY");
-  return createClient(url, key, { auth: { persistSession: false } });
+export async function getUserFromCookie() {
+  const cookieStore = cookies();
+
+  const url = mustEnv("NEXT_PUBLIC_SUPABASE_URL");
+  const anon = mustEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
+
+  const sb = createServerClient(url, anon, {
+    cookies: {
+      getAll() {
+        return cookieStore.getAll();
+      },
+      setAll() {
+        // Route handlers don't need to set cookies for our usage here.
+      },
+    },
+  });
+
+  const { data, error } = await sb.auth.getUser();
+  if (error) return null;
+  return data.user ?? null;
 }
 
-/**
- * We do NOT rely on cookies (too many formats, breaks easily).
- * Browser sends Authorization: Bearer <supabase_access_token>.
- * Server uses admin.auth.getUser(token) to get user id.
- */
-export async function getUserIdFromAuthHeader(admin: any, req: Request) {
-  const auth = req.headers.get("authorization") || "";
-  const m = auth.match(/^Bearer\s+(.+)$/i);
-  const token = m?.[1]?.trim();
-  if (!token) return null;
+export async function requireUserId() {
+  const user = await getUserFromCookie();
+  if (!user) throw new Error("Not signed in");
+  return user.id;
+}
 
-  const { data, error } = await admin.auth.getUser(token);
-  if (error) return null;
-
-  return data?.user?.id || null;
+function vercelHeaders() {
+  return {
+    Authorization: `Bearer ${mustEnv("VERCEL_TOKEN")}`,
+    "Content-Type": "application/json",
+  };
 }
 
 export async function vercelFetch(path: string, init?: RequestInit) {
-  const token = mustEnv("VERCEL_TOKEN");
-  const url = `https://api.vercel.com${path}`;
-
-  const res = await fetch(url, {
+  const res = await fetch(`https://api.vercel.com${path}`, {
     ...init,
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${token}`,
-      ...(init?.headers || {}),
-    },
-    // keep node fetch from caching weirdly
+    headers: { ...vercelHeaders(), ...(init?.headers || {}) },
     cache: "no-store",
   });
 
@@ -74,6 +72,95 @@ export async function vercelFetch(path: string, init?: RequestInit) {
     json = null;
   }
 
-  return { ok: res.ok, status: res.status, text, json };
+  if (!res.ok) {
+    const msg =
+      json?.error?.message ||
+      json?.message ||
+      `${res.status} ${res.statusText}: ${text.slice(0, 200)}`;
+    throw new Error(msg);
+  }
+
+  return json;
 }
+
+export function getProjectId() {
+  return mustEnv("VERCEL_PROJECT_ID");
+}
+
+export function extractDnsRecordsFromVercelDomain(vercelDomainObj: any) {
+  // Vercel returns shapes that vary slightly.
+  // We normalize into a predictable array.
+  const records: any[] = [];
+
+  const v = vercelDomainObj?.verification;
+  if (Array.isArray(v)) {
+    for (const r of v) {
+      records.push({
+        type: r.type || r.recordType || "TXT",
+        name: r.domain || r.name || r.record || r.target || "",
+        value: r.value || r.expectedValue || r.target || "",
+        reason: r.reason || "",
+      });
+    }
+  }
+
+  // Some responses include `cnames` or `nameservers` etc — we keep raw `verification` too.
+  return records;
+}
+
+export async function upsertCustomDomain(args: {
+  user_id: string;
+  site_id?: string | null;
+  domain: string;
+  status?: string;
+  verified?: boolean;
+  dns_records?: any;
+  verification?: any;
+}) {
+  const admin = supabaseAdmin();
+
+  const payload: any = {
+    user_id: args.user_id,
+    domain: args.domain,
+    site_id: args.site_id ?? null,
+    status: args.status ?? "pending",
+    verified: args.verified ?? false,
+    dns_records: args.dns_records ?? null,
+    verification: args.verification ?? null,
+    updated_at: new Date().toISOString(),
+  };
+
+  // If row doesn't exist yet, created_at default will handle it.
+  const { data, error } = await admin
+    .from("custom_domains")
+    .upsert(payload, { onConflict: "user_id,domain" })
+    .select("*")
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function getCustomDomainRow(user_id: string, domain: string) {
+  const admin = supabaseAdmin();
+
+  const { data, error } = await admin
+    .from("custom_domains")
+    .select("*")
+    .eq("user_id", user_id)
+    .eq("domain", domain)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export function jsonOk(body: any) {
+  return NextResponse.json(body, { status: 200 });
+}
+
+export function jsonErr(msg: string, status = 400) {
+  return NextResponse.json({ error: msg }, { status });
+}
+
 
