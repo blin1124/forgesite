@@ -1,97 +1,100 @@
 import { NextResponse } from "next/server";
 import {
+  supabaseAdmin,
   getUserIdFromAuthHeader,
   normalizeDomain,
-  supabaseAdmin,
-  vercelFetch,
   mustEnv,
-  jsonErr,
-  jsonOk,
+  vercelFetch,
+  extractDnsRecordsFromVercelDomain,
+  upsertCustomDomain,
+  getProjectId,
 } from "../_lib";
 
 export const runtime = "nodejs";
 
 /**
- * Request/prepare a domain connection.
- * Creates or updates a row in custom_domains, and attempts to add the domain to Vercel.
+ * Request a custom domain:
+ * - verifies user via Authorization: Bearer <supabase access token>
+ * - adds domain to Vercel project
+ * - stores row in custom_domains with dns_records, vercel_payload, last_error
  *
- * Body: { domain: "example.com" }
- * Header: Authorization: Bearer <supabase access token>
+ * Body:
+ * { domain: string, site_id?: string }
  */
 export async function POST(req: Request) {
   try {
-    const user_id = await getUserIdFromAuthHeader(req);
-    if (!user_id) return jsonErr("Not signed in", 401);
+    // ✅ FIX: pass (admin, req)
+    const user_id = await getUserIdFromAuthHeader(supabaseAdmin, req);
 
     const body = await req.json().catch(() => ({}));
     const domainRaw = String(body?.domain || "");
+    const site_id = body?.site_id ? String(body.site_id) : null;
+
     const domain = normalizeDomain(domainRaw);
+    if (!domain) {
+      return NextResponse.json({ error: "Invalid domain" }, { status: 400 });
+    }
 
-    if (!domain) return jsonErr("Please enter a valid domain (example.com).", 400);
+    // Vercel project
+    const projectId = getProjectId();
 
-    const projectId = mustEnv("VERCEL_PROJECT_ID");
+    // Optional team support later
+    const teamId = process.env.VERCEL_TEAM_ID || "";
+    const teamQS = teamId ? `?teamId=${encodeURIComponent(teamId)}` : "";
 
-    const admin = supabaseAdmin();
-
-    // Ensure basic row exists (keep schema minimal)
-    // Required columns: user_id, domain, status, updated_at
-    await admin.from("custom_domains").upsert(
-      {
-        user_id,
-        domain,
-        status: "pending",
-        updated_at: new Date().toISOString(),
-      } as any,
-      { onConflict: "user_id,domain" } as any
-    );
-
-    // Add to Vercel project
-    const add = await vercelFetch(`/v9/projects/${projectId}/domains`, {
+    // Add domain to Vercel project
+    const add = await vercelFetch(`/v9/projects/${encodeURIComponent(projectId)}/domains${teamQS}`, {
       method: "POST",
       body: JSON.stringify({ name: domain }),
     });
 
-    // 409 means already added; treat as ok
-    if (!add.res.ok && add.res.status !== 409) {
-      const msg = add.json?.error?.message || add.json?.message || add.text || "Vercel add domain failed";
-      await admin.from("custom_domains").upsert(
-        {
-          user_id,
-          domain,
-          status: "error",
-          updated_at: new Date().toISOString(),
-          last_error: msg,
-        } as any,
-        { onConflict: "user_id,domain" } as any
-      );
-      return jsonErr(msg, 500);
+    if (!add.res.ok) {
+      const msg =
+        add.json?.error?.message ||
+        add.json?.message ||
+        `Vercel add domain failed (${add.res.status})`;
+
+      await upsertCustomDomain({
+        admin: supabaseAdmin,
+        user_id,
+        site_id,
+        domain,
+        status: "error",
+        last_error: msg,
+        vercel_payload: add.json || add.text,
+      });
+
+      return NextResponse.json({ error: msg, details: add.json || add.text }, { status: 400 });
     }
 
-    // Fetch status info from Vercel
-    const st = await vercelFetch(`/v9/projects/${projectId}/domains/${encodeURIComponent(domain)}`, {
-      method: "GET",
+    const dns_records = extractDnsRecordsFromVercelDomain(add.json);
+    const verified = !!add.json?.verified;
+
+    const row = await upsertCustomDomain({
+      admin: supabaseAdmin,
+      user_id,
+      site_id,
+      domain,
+      status: verified ? "verified" : "pending",
+      dns_records,
+      vercel_verified: verified,
+      vercel_payload: add.json,
+      last_error: null,
     });
 
-    const verified = !!st.json?.verified;
-    const nextStatus = verified ? "verified" : "needs_dns";
-
-    await admin.from("custom_domains").upsert(
-      {
-        user_id,
-        domain,
-        status: nextStatus,
-        vercel_verified: verified,
-        vercel_payload: st.json || null,
-        updated_at: new Date().toISOString(),
-      } as any,
-      { onConflict: "user_id,domain" } as any
-    );
-
-    return jsonOk({ domain, status: nextStatus, verified, vercel: st.json || null });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Domain request failed" }, { status: 500 });
+    return NextResponse.json({
+      ok: true,
+      domain: row?.domain || domain,
+      status: row?.status || (verified ? "verified" : "pending"),
+      vercel_verified: row?.vercel_verified ?? verified,
+      dns_records: row?.dns_records ?? dns_records,
+    });
+  } catch (err: any) {
+    return NextResponse.json({ error: err?.message || "Request failed" }, { status: 500 });
   }
 }
+
+
 
 
 
