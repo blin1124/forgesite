@@ -19,6 +19,7 @@ export const runtime = "nodejs";
  */
 export async function POST(req: Request) {
   try {
+    // ✅ your _lib expects (admin, req) or (admin, req, ...) — your prior errors show this signature
     const user_id = await getUserIdFromAuthHeader(supabaseAdmin, req);
     if (!user_id) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
@@ -27,8 +28,8 @@ export async function POST(req: Request) {
     const domain = normalizeDomain(rawDomain);
     if (!domain) return NextResponse.json({ error: "Invalid domain" }, { status: 400 });
 
-    // ensure the domain belongs to this user in DB (basic safety)
-    const existing = await getCustomDomainRow({ admin: supabaseAdmin, user_id, domain });
+    // ✅ FIX: your _lib expects 3 args, not an object
+    const existing = await getCustomDomainRow(supabaseAdmin, user_id, domain);
     if (!existing) {
       return NextResponse.json({ error: "Domain not found for this user" }, { status: 404 });
     }
@@ -50,7 +51,7 @@ export async function POST(req: Request) {
         st.text ||
         `Failed to fetch domain status (${st.res.status})`;
 
-      // ✅ FIX: include admin
+      // ✅ upsertCustomDomain requires admin in your typing
       await upsertCustomDomain({
         admin: supabaseAdmin,
         user_id,
