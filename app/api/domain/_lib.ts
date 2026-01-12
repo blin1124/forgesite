@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
 /**
  * Small shared helpers for domain routes.
- * Important goal: STOP type hell by not over-typing Supabase generics.
+ * Goal: stable exports so routes stop breaking.
  */
 
 export function jsonOk(data: any = {}, status = 200) {
@@ -17,31 +16,33 @@ export function jsonErr(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
 
+export function mustEnv(name: string) {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env: ${name}`);
+  return v;
+}
+
 export function normalizeDomain(input: string) {
-  const d = String(input || "")
+  return String(input || "")
     .trim()
     .toLowerCase()
     .replace(/^https?:\/\//, "")
     .replace(/^www\./, "")
     .replace(/\/.*$/, "");
-  return d;
 }
 
 /**
- * Backward compatible export name:
- * Some routes import `supabaseAdmin` directly.
- * We expose a *function* but also a *value* for compatibility.
+ * Backwards compatibility:
+ * Some older routes may still import `supabaseAdmin`.
+ * We expose it as a function that returns the admin client.
  */
 export function supabaseAdmin() {
   return getSupabaseAdmin();
 }
 
 /**
- * requireUserId:
  * Reads Authorization: Bearer <supabase access token>
  * and returns the Supabase user id.
- *
- * Use this for any /api/domain/* route called from the browser.
  */
 export async function requireUserId(req: Request) {
   const authHeader = req.headers.get("authorization") || "";
@@ -62,25 +63,7 @@ export async function requireUserId(req: Request) {
 }
 
 /**
- * If you ever need the admin client directly
- */
-export function getSupabaseAdmin() {
-  return getSupabaseAdmin();
-}
-
-/**
- * Keep this exported so old imports don't break:
- * `mustEnv("NAME")`
- */
-export function mustEnv(name: string) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env: ${name}`);
-  return v;
-}
-
-/**
- * Minimal Vercel fetch helper (kept generic).
- * If you already have another version elsewhere, keep this one here for domain routes.
+ * Minimal Vercel fetch helper for domain endpoints.
  */
 export async function vercelFetch(path: string, init?: RequestInit) {
   const token = mustEnv("VERCEL_TOKEN");
