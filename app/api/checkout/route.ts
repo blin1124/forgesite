@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
-import { supabaseAdmin } from "@/lib/supabase/admin";
+import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   try {
-    // ✅ Expect Bearer token from client
+    // ✅ Expect token from client
     const authHeader = req.headers.get("authorization") || "";
     const token = authHeader.startsWith("Bearer ")
       ? authHeader.slice("Bearer ".length).trim()
@@ -17,6 +17,7 @@ export async function POST(req: Request) {
     }
 
     // ✅ Validate user using service role client
+    const supabaseAdmin = getSupabaseAdmin();
     const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
     const user = userData?.user;
 
@@ -24,27 +25,15 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid session" }, { status: 401 });
     }
 
-    // ✅ Read { next } from body
+    // allow passing "next" from BillingClient, fallback /builder
     const body = await req.json().catch(() => ({}));
     const next = typeof body?.next === "string" ? body.next : "/builder";
 
     const priceId = process.env.STRIPE_PRICE_ID;
-    if (!priceId) {
-      return NextResponse.json({ error: "Missing STRIPE_PRICE_ID" }, { status: 500 });
-    }
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL;
 
-    /**
-     * ✅ IMPORTANT:
-     * Use the incoming request origin FIRST so we never send Stripe back to the wrong domain.
-     * (Vercel previews / custom domains / forgesite-seven vs forgesite-ai problems go away.)
-     */
-    const origin = req.headers.get("origin") || process.env.NEXT_PUBLIC_APP_URL || "";
-    if (!origin) {
-      return NextResponse.json(
-        { error: "Missing request origin and NEXT_PUBLIC_APP_URL" },
-        { status: 500 }
-      );
-    }
+    if (!priceId) return NextResponse.json({ error: "Missing STRIPE_PRICE_ID" }, { status: 500 });
+    if (!appUrl) return NextResponse.json({ error: "Missing NEXT_PUBLIC_APP_URL" }, { status: 500 });
 
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
@@ -52,15 +41,13 @@ export async function POST(req: Request) {
       line_items: [{ price: priceId, quantity: 1 }],
       customer_email: user.email ?? undefined,
 
-      // 🔥 used by webhook to attach entitlement to the Supabase user
+      // 🔥 critical for webhook entitlement unlock
       metadata: {
         supabase_user_id: user.id,
       },
 
-      success_url: `${origin}/pro/success?session_id={CHECKOUT_SESSION_ID}&next=${encodeURIComponent(
-        next
-      )}`,
-      cancel_url: `${origin}/billing?next=${encodeURIComponent(next)}`,
+      success_url: `${appUrl}/pro/success?session_id={CHECKOUT_SESSION_ID}&next=${encodeURIComponent(next)}`,
+      cancel_url: `${appUrl}/billing?next=${encodeURIComponent(next)}`,
     });
 
     return NextResponse.json({ url: session.url });
