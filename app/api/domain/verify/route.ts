@@ -1,67 +1,61 @@
-import { NextResponse } from "next/server";
-import { getUserIdFromAuthHeader, normalizeDomain, supabaseAdmin, vercelFetch, mustEnv } from "../_lib";
+import {
+  extractDnsRecordsFromVercelDomain,
+  getProjectId,
+  getCustomDomainRow,
+  jsonErr,
+  jsonOk,
+  normalizeDomain,
+  requireUserId,
+  upsertCustomDomain,
+  vercelFetch,
+} from "../_lib";
 
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   try {
-    const admin = supabaseAdmin();
-    const user_id = await getUserIdFromAuthHeader(admin, req);
-    if (!user_id) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
-
+    const user_id = await requireUserId();
     const body = await req.json().catch(() => ({}));
     const domain = normalizeDomain(String(body?.domain || ""));
-    if (!domain) return NextResponse.json({ error: "Missing domain" }, { status: 400 });
 
-    const projectId = mustEnv("VERCEL_PROJECT_ID");
+    if (!domain) return jsonErr("Missing domain");
 
-    // 1) Ask Vercel to verify now (this exists for many domain states)
-    const v = await vercelFetch(`/v10/projects/${projectId}/domains/${encodeURIComponent(domain)}/verify`, {
-      method: "POST",
-      body: JSON.stringify({}),
-    });
+    const existing = await getCustomDomainRow(user_id, domain);
+    const projectId = getProjectId();
 
-    // Some accounts/plans/states may not support verify endpoint;
-    // we still do a GET afterwards to determine true status.
-    const info = await vercelFetch(`/v10/projects/${projectId}/domains/${encodeURIComponent(domain)}`, {
+    const dom = await vercelFetch(`/v10/projects/${projectId}/domains/${encodeURIComponent(domain)}`, {
       method: "GET",
     });
 
-    if (!info.ok) {
-      await admin
-        .from("custom_domains")
-        .update({ status: "error", last_error: info.json?.error?.message || info.text || `Vercel status failed (${info.status})` })
-        .eq("user_id", user_id)
-        .eq("domain", domain);
+    const dns_records = extractDnsRecordsFromVercelDomain(dom);
+    const verified = !!dom?.verified;
+    const status = verified ? "verified" : "pending";
 
-      return NextResponse.json(
-        { error: info.json?.error?.message || `Vercel status failed (${info.status})`, details: info.json || info.text },
-        { status: 500 }
-      );
-    }
-
-    const verification = info.json;
-    const isVerified = Boolean(verification?.verified) === true;
-
-    await admin
-      .from("custom_domains")
-      .update({
-        verification,
-        verified: isVerified,
-        status: isVerified ? "verified" : "pending",
-        last_error: isVerified ? null : (v.ok ? null : (v.json?.error?.message || v.text || "Verify endpoint error")),
-      })
-      .eq("user_id", user_id)
-      .eq("domain", domain);
-
-    return NextResponse.json({
+    const row = await upsertCustomDomain({
+      user_id,
+      site_id: existing?.site_id ?? (body?.site_id ? String(body.site_id) : null),
       domain,
-      verified: isVerified,
-      verify_call: v.ok ? v.json : { error: v.json?.error?.message || v.text || `Verify failed (${v.status})` },
-      verification,
+      status,
+      verified,
+      dns_records,
+      verification: dom,
+    });
+
+    return jsonOk({
+      domain: row.domain,
+      site_id: row.site_id,
+      verified: row.verified,
+      status: row.status,
+      dns_records: row.dns_records || [],
+      vercel: {
+        verified: !!dom?.verified,
+        verification: dom?.verification || null,
+      },
     });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Verify failed" }, { status: 500 });
+    return jsonErr(e?.message || "Verify failed", 500);
   }
 }
+
+
 
