@@ -1,7 +1,6 @@
 import {
   extractDnsRecordsFromVercelDomain,
   getProjectId,
-  getCustomDomainRow,
   jsonErr,
   jsonOk,
   normalizeDomain,
@@ -12,50 +11,67 @@ import {
 
 export const runtime = "nodejs";
 
+/**
+ * POST { domain }
+ * Header: Authorization: Bearer <supabase access token>
+ *
+ * Calls Vercel domain status and updates your DB row accordingly.
+ */
 export async function POST(req: Request) {
   try {
-    const user_id = await requireUserId();
+    const user_id = await requireUserId(req);
+
     const body = await req.json().catch(() => ({}));
     const domain = normalizeDomain(String(body?.domain || ""));
+    if (!domain) return jsonErr("Invalid domain", 400);
 
-    if (!domain) return jsonErr("Missing domain");
-
-    const existing = await getCustomDomainRow(user_id, domain);
     const projectId = getProjectId();
 
-    const dom = await vercelFetch(`/v10/projects/${projectId}/domains/${encodeURIComponent(domain)}`, {
+    const st = await vercelFetch(`/v9/projects/${projectId}/domains/${encodeURIComponent(domain)}`, {
       method: "GET",
     });
 
-    const dns_records = extractDnsRecordsFromVercelDomain(dom);
-    const verified = !!dom?.verified;
-    const status = verified ? "verified" : "pending";
+    if (!st.res.ok) {
+      const msg = st.json?.error?.message || st.json?.message || st.text || "Verify failed";
+      await upsertCustomDomain({
+        user_id,
+        domain,
+        status: "error",
+        last_error: msg,
+        vercel_payload: st.json || null,
+      });
+      return jsonErr(msg, 500);
+    }
+
+    const verified = !!st.json?.verified;
+    const dns_records = extractDnsRecordsFromVercelDomain(st.json);
+
+    const nextStatus = verified ? "verified" : "needs_dns";
 
     const row = await upsertCustomDomain({
       user_id,
-      site_id: existing?.site_id ?? (body?.site_id ? String(body.site_id) : null),
       domain,
-      status,
-      verified,
+      status: nextStatus,
+      vercel_verified: verified,
       dns_records,
-      verification: dom,
+      vercel_payload: st.json || null,
+      last_error: null,
     });
 
     return jsonOk({
-      domain: row.domain,
-      site_id: row.site_id,
-      verified: row.verified,
-      status: row.status,
-      dns_records: row.dns_records || [],
-      vercel: {
-        verified: !!dom?.verified,
-        verification: dom?.verification || null,
-      },
+      domain,
+      verified,
+      status: nextStatus,
+      dns_records,
+      row,
+      vercel: st.json,
     });
   } catch (e: any) {
     return jsonErr(e?.message || "Verify failed", 500);
   }
 }
+
+
 
 
 
