@@ -1,115 +1,111 @@
 import { NextResponse } from "next/server";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
-// ---------- small helpers ----------
+/**
+ * Small shared helpers for domain routes.
+ * Important goal: STOP type hell by not over-typing Supabase generics.
+ */
+
+export function jsonOk(data: any = {}, status = 200) {
+  return NextResponse.json(data, { status });
+}
+
 export function jsonErr(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
 
+export function normalizeDomain(input: string) {
+  const d = String(input || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\/.*$/, "");
+  return d;
+}
+
+/**
+ * Backward compatible export name:
+ * Some routes import `supabaseAdmin` directly.
+ * We expose a *function* but also a *value* for compatibility.
+ */
+export function supabaseAdmin() {
+  return getSupabaseAdmin();
+}
+
+/**
+ * requireUserId:
+ * Reads Authorization: Bearer <supabase access token>
+ * and returns the Supabase user id.
+ *
+ * Use this for any /api/domain/* route called from the browser.
+ */
+export async function requireUserId(req: Request) {
+  const authHeader = req.headers.get("authorization") || "";
+  const token = authHeader.startsWith("Bearer ")
+    ? authHeader.slice("Bearer ".length).trim()
+    : "";
+
+  if (!token) throw new Error("Auth session missing");
+
+  const admin = getSupabaseAdmin();
+
+  const { data: userData, error: userErr } = await admin.auth.getUser(token);
+  const user = userData?.user;
+
+  if (userErr || !user) throw new Error("Invalid session");
+
+  return user.id;
+}
+
+/**
+ * If you ever need the admin client directly
+ */
+export function getSupabaseAdmin() {
+  return getSupabaseAdmin();
+}
+
+/**
+ * Keep this exported so old imports don't break:
+ * `mustEnv("NAME")`
+ */
 export function mustEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env: ${name}`);
   return v;
 }
 
-export function normalizeDomain(input: string) {
-  const d = String(input || "").trim().toLowerCase();
-  if (!d) return "";
-  // strip protocol + path if someone pasted it
-  const cleaned = d
-    .replace(/^https?:\/\//, "")
-    .replace(/\/.*$/, "")
-    .trim()
-    .toLowerCase();
-  return cleaned;
-}
-
-// ---------- supabase admin ----------
-export function getSupabaseAdmin() {
-  const url = mustEnv("SUPABASE_URL");
-  const key = mustEnv("SUPABASE_SERVICE_ROLE_KEY");
-  return createClient(url, key, { auth: { persistSession: false } });
-}
-
-// ---------- auth from request ----------
-export async function getUserIdFromRequest(admin: SupabaseClient, req: Request) {
-  const auth = req.headers.get("authorization") || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length).trim() : "";
-  if (!token) return null;
-
-  const { data, error } = await admin.auth.getUser(token);
-  if (error || !data?.user) return null;
-  return data.user.id;
-}
-
-// ---------- vercel ----------
-export function getVercelToken() {
-  return mustEnv("VERCEL_TOKEN");
-}
-
-export function getVercelProjectId() {
-  // you provided: prj_lmTrFFCheO4cW9JfRlSraCqss4pN
-  // store it in env: VERCEL_PROJECT_ID
-  return mustEnv("VERCEL_PROJECT_ID");
-}
-
+/**
+ * Minimal Vercel fetch helper (kept generic).
+ * If you already have another version elsewhere, keep this one here for domain routes.
+ */
 export async function vercelFetch(path: string, init?: RequestInit) {
-  const token = getVercelToken();
-  const base = "https://api.vercel.com";
-  const res = await fetch(`${base}${path}`, {
+  const token = mustEnv("VERCEL_TOKEN");
+  const url = path.startsWith("http") ? path : `https://api.vercel.com${path}`;
+
+  const res = await fetch(url, {
     ...init,
     headers: {
+      ...(init?.headers || {}),
       authorization: `Bearer ${token}`,
       "content-type": "application/json",
-      ...(init?.headers || {}),
     },
   });
 
   const text = await res.text();
-  let json: any = {};
+  let json: any = null;
   try {
     json = JSON.parse(text);
   } catch {
-    json = { raw: text };
+    json = null;
   }
 
-  if (!res.ok) {
-    const msg =
-      json?.error?.message ||
-      json?.message ||
-      `Vercel API error ${res.status}: ${text.slice(0, 200)}`;
-    throw new Error(msg);
-  }
-
-  return json;
+  return { res, text, json };
 }
 
-/**
- * Pull DNS instructions from Vercel "domain config" style responses.
- * We accept different shapes because Vercel responses can vary.
- */
-export function extractDnsRecordsFromVercelDomain(domainJson: any): any[] {
-  // common candidates:
-  // - domainJson?.config?.misconfigured / configured
-  // - domainJson?.verification / verified / verificationRecords
-  // - domainJson?.requiredDnsRecords
-  // - domainJson?.nameservers
-  const records =
-    domainJson?.requiredDnsRecords ||
-    domainJson?.verificationRecords ||
-    domainJson?.config?.requiredDnsRecords ||
-    domainJson?.config?.verificationRecords ||
-    [];
-
-  if (Array.isArray(records)) return records;
-
-  // sometimes it's an object map
-  if (records && typeof records === "object") return [records];
-
-  return [];
-}
 
 
 
