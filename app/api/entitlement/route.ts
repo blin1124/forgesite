@@ -1,45 +1,58 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/admin";
+import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
+function jsonError(message: string, status = 400) {
+  return NextResponse.json({ error: message }, { status });
+}
+
+function isActive(status: string | null | undefined) {
+  return status === "active" || status === "trialing";
+}
+
 export async function GET(req: Request) {
-  const authHeader = req.headers.get("authorization") || "";
-  const token = authHeader.startsWith("Bearer ")
-    ? authHeader.slice("Bearer ".length).trim()
-    : "";
+  try {
+    const authHeader = req.headers.get("authorization") || "";
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice("Bearer ".length).trim()
+      : "";
 
-  if (!token) {
-    return NextResponse.json({ entitled: false, error: "Auth session missing" }, { status: 401 });
+    if (!token) return jsonError("Missing Authorization Bearer token", 401);
+
+    // ✅ IMPORTANT: get the admin client instance
+    const admin = getSupabaseAdmin();
+
+    // ✅ Validate user from JWT
+    const { data: userData, error: userErr } = await admin.auth.getUser(token);
+    const user = userData?.user;
+
+    if (userErr || !user) {
+      return jsonError("Invalid session", 401);
+    }
+
+    // ✅ Read entitlement row
+    const { data: ent, error: entErr } = await admin
+      .from("entitlements")
+      .select("status, current_period_end")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (entErr) return jsonError(entErr.message, 500);
+
+    const status = ent?.status ?? null;
+    const active = isActive(status);
+
+    return NextResponse.json({
+      user_id: user.id,
+      active,
+      status,
+      current_period_end: ent?.current_period_end ?? null,
+    });
+  } catch (err: any) {
+    console.error("ENTITLEMENT_ROUTE_ERROR:", err);
+    return jsonError(err?.message || "Entitlement route crashed", 500);
   }
-
-  const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
-  const user = userData?.user;
-
-  if (userErr || !user) {
-    return NextResponse.json({ entitled: false, error: "Invalid session" }, { status: 401 });
-  }
-
-  const { data, error } = await supabaseAdmin
-    .from("entitlements")
-    .select("status, current_period_end")
-    .eq("user_id", user.id)
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    return NextResponse.json({ entitled: false, error: error.message }, { status: 500 });
-  }
-
-  const status = (data?.status || "").toLowerCase();
-  const okStatus = status === "active" || status === "trialing";
-
-  // If current_period_end exists, treat expired subscriptions as not entitled
-  const cpe = data?.current_period_end ? new Date(data.current_period_end).getTime() : null;
-  const notExpired = cpe == null ? true : cpe > Date.now();
-
-  return NextResponse.json({ entitled: okStatus && notExpired, status: data?.status ?? null });
 }
 
 
