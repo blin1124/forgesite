@@ -25,8 +25,8 @@ export function getSupabaseAdminClient() {
   return getSupabaseAdmin();
 }
 
-/** Back-compat name (some of your routes may import getSupabaseAdmin) */
-export function getSupabaseAdmin() {
+/** Back-compat: some routes may import getSupabaseAdmin() */
+export function getSupabaseAdminCompat() {
   return getSupabaseAdminClient();
 }
 
@@ -94,21 +94,17 @@ export async function vercelFetch(path: string, init?: RequestInit) {
 }
 
 export function getProjectId() {
-  // You told me you have the Project ID already:
-  // prj_lmTrFFCheO4cW9JfRlSraCqss4pN
-  // But we still read from env to keep prod/dev clean.
   return mustEnv("VERCEL_PROJECT_ID");
 }
 
-/** Some files might call getVercelProjectId */
+/** Alias some files might call */
 export function getVercelProjectId() {
   return getProjectId();
 }
 
 /**
- * Pull “required DNS records” out of Vercel domain response.
- * Vercel's API returns a `verification` array and/or `verified` flags.
- * We'll normalize into a simple array.
+ * ✅ IMPORTANT: Only ONE export with this name (no redefinition).
+ * Extract DNS records Vercel says are required for verification.
  */
 export function extractDnsRecordsFromVercelDomain(vercelDomainJson: any) {
   const out: Array<{
@@ -118,29 +114,20 @@ export function extractDnsRecordsFromVercelDomain(vercelDomainJson: any) {
     reason?: string;
   }> = [];
 
+  // Vercel commonly returns `verification: [{type, domain, value, reason}]`
   const verification = vercelDomainJson?.verification;
   if (Array.isArray(verification)) {
     for (const v of verification) {
       const type = String(v?.type || "").toUpperCase();
-      const domain = String(v?.domain || "");
+      const name = String(v?.domain || "");
       const value = String(v?.value || "");
       const reason = v?.reason ? String(v.reason) : undefined;
-      if (type && domain && value) out.push({ type, name: domain, value, reason });
+      if (type && name && value) out.push({ type, name, value, reason });
     }
   }
 
-  // Some responses include a `verification` object or other fields; keep it safe.
   return out;
 }
-
-/** Alias some of your routes referenced */
-export function extractDnsRecordsFromVercelDomainAlias(vercelDomainJson: any) {
-  return extractDnsRecordsFromVercelDomain(vercelDomainJson);
-}
-
-/** Match the name your routes complained about earlier */
-export const extractDnsRecordsFromVercelDomain =
-  extractDnsRecordsFromVercelDomainAlias as unknown as (j: any) => any[];
 
 /** ---------- DB helpers (custom_domains) ---------- */
 export async function getCustomDomainRow(admin: SupabaseClient, user_id: string, domain: string) {
@@ -199,6 +186,8 @@ export async function upsertCustomDomain(args: {
   if (error) throw error;
   return data;
 }
+
+
 
 
 
