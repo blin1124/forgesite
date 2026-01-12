@@ -1,46 +1,78 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin as _supabaseAdmin } from "@/lib/supabase/admin";
+import { getSupabaseAdmin } from "@/lib/supabase/admin";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
+export const runtime = "nodejs";
+
+/** ---------- response helpers ---------- */
 export function jsonErr(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
 
-export function jsonOk(data: any) {
-  return NextResponse.json(data);
+export function jsonOk(payload: any = {}) {
+  return NextResponse.json(payload);
 }
 
+/** ---------- env helpers ---------- */
 export function mustEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
   return v;
 }
 
-export function getProjectId() {
-  return mustEnv("VERCEL_PROJECT_ID");
+/** ---------- supabase admin ---------- */
+export function getSupabaseAdminClient() {
+  return getSupabaseAdmin();
 }
 
-export function supabaseAdmin() {
-  return _supabaseAdmin();
+/** Back-compat name (some of your routes may import getSupabaseAdmin) */
+export function getSupabaseAdmin() {
+  return getSupabaseAdminClient();
 }
 
+/** ---------- auth helpers ---------- */
+export async function getUserIdFromRequest(admin: SupabaseClient, req: Request): Promise<string> {
+  const authHeader = req.headers.get("authorization") || "";
+  const token = authHeader.startsWith("Bearer ")
+    ? authHeader.slice("Bearer ".length).trim()
+    : "";
+
+  if (!token) throw new Error("Missing Authorization Bearer token");
+
+  const { data, error } = await admin.auth.getUser(token);
+  if (error || !data?.user?.id) throw new Error("Invalid session");
+
+  return data.user.id;
+}
+
+/** Alias some routes may still use */
+export async function getUserIdFromAuthHeader(admin: SupabaseClient, req: Request): Promise<string> {
+  return getUserIdFromRequest(admin, req);
+}
+
+/** Preferred helper used by some routes */
+export async function requireUserId(req: Request): Promise<string> {
+  const admin = getSupabaseAdminClient();
+  return getUserIdFromRequest(admin, req);
+}
+
+/** ---------- domain helpers ---------- */
 export function normalizeDomain(input: string) {
-  const raw = (input || "").trim().toLowerCase();
-  const noProto = raw.replace(/^https?:\/\//, "").split("/")[0].trim();
-  const d = noProto.replace(/^www\./, "");
-
-  if (!d || d.length < 3) return "";
-  if (!d.includes(".")) return "";
-  if (/\s/.test(d)) return "";
-  if (!/^[a-z0-9.-]+$/.test(d)) return "";
-
+  let d = (input || "").trim().toLowerCase();
+  d = d.replace(/^https?:\/\//, "");
+  d = d.replace(/^www\./, "");
+  d = d.split("/")[0];
+  d = d.replace(/\.+$/, "");
+  if (!d || d.includes(" ")) return "";
   return d;
 }
 
+/** ---------- vercel helpers ---------- */
 export async function vercelFetch(path: string, init?: RequestInit) {
   const token = mustEnv("VERCEL_TOKEN");
-  const url = `https://api.vercel.com${path}`;
+  const base = "https://api.vercel.com";
 
-  const res = await fetch(url, {
+  const res = await fetch(base + path, {
     ...init,
     headers: {
       authorization: `Bearer ${token}`,
@@ -61,34 +93,57 @@ export async function vercelFetch(path: string, init?: RequestInit) {
   return { res, text, json };
 }
 
-/**
- * Get signed-in user id using Authorization: Bearer <supabase access token>
- */
-export async function getUserIdFromAuthHeader(req: Request) {
-  const auth = req.headers.get("authorization") || "";
-  const token = auth.toLowerCase().startsWith("bearer ")
-    ? auth.slice("Bearer ".length).trim()
-    : "";
-
-  if (!token) return null;
-
-  const admin = supabaseAdmin();
-  const { data, error } = await admin.auth.getUser(token);
-  if (error || !data?.user?.id) return null;
-  return data.user.id;
+export function getProjectId() {
+  // You told me you have the Project ID already:
+  // prj_lmTrFFCheO4cW9JfRlSraCqss4pN
+  // But we still read from env to keep prod/dev clean.
+  return mustEnv("VERCEL_PROJECT_ID");
 }
 
-export async function requireUserId(req: Request) {
-  const uid = await getUserIdFromAuthHeader(req);
-  if (!uid) throw new Error("Not signed in");
-  return uid;
+/** Some files might call getVercelProjectId */
+export function getVercelProjectId() {
+  return getProjectId();
 }
 
 /**
- * Read the domain row (for this user + domain)
+ * Pull “required DNS records” out of Vercel domain response.
+ * Vercel's API returns a `verification` array and/or `verified` flags.
+ * We'll normalize into a simple array.
  */
-export async function getCustomDomainRow(user_id: string, domain: string) {
-  const admin = supabaseAdmin();
+export function extractDnsRecordsFromVercelDomain(vercelDomainJson: any) {
+  const out: Array<{
+    type: string;
+    name: string;
+    value: string;
+    reason?: string;
+  }> = [];
+
+  const verification = vercelDomainJson?.verification;
+  if (Array.isArray(verification)) {
+    for (const v of verification) {
+      const type = String(v?.type || "").toUpperCase();
+      const domain = String(v?.domain || "");
+      const value = String(v?.value || "");
+      const reason = v?.reason ? String(v.reason) : undefined;
+      if (type && domain && value) out.push({ type, name: domain, value, reason });
+    }
+  }
+
+  // Some responses include a `verification` object or other fields; keep it safe.
+  return out;
+}
+
+/** Alias some of your routes referenced */
+export function extractDnsRecordsFromVercelDomainAlias(vercelDomainJson: any) {
+  return extractDnsRecordsFromVercelDomain(vercelDomainJson);
+}
+
+/** Match the name your routes complained about earlier */
+export const extractDnsRecordsFromVercelDomain =
+  extractDnsRecordsFromVercelDomainAlias as unknown as (j: any) => any[];
+
+/** ---------- DB helpers (custom_domains) ---------- */
+export async function getCustomDomainRow(admin: SupabaseClient, user_id: string, domain: string) {
   const { data, error } = await admin
     .from("custom_domains")
     .select("*")
@@ -96,102 +151,55 @@ export async function getCustomDomainRow(user_id: string, domain: string) {
     .eq("domain", domain)
     .maybeSingle();
 
-  if (error) throw new Error(error.message);
-  return data as any;
+  if (error) throw error;
+  return data;
 }
 
-/**
- * Upsert into custom_domains with a safe, flexible payload.
- * If your table doesn't have some optional columns, remove them from the payload here.
- */
-export async function upsertCustomDomain(payload: Record<string, any>) {
-  const admin = supabaseAdmin();
+export async function upsertCustomDomain(args: {
+  admin: SupabaseClient;
+  user_id: string;
+  site_id?: string | null;
+  domain: string;
+  status?: string | null;
+  dns_records?: any[] | null;
+  vercel_verified?: boolean | null;
+  vercel_payload?: any | null;
+  last_error?: string | null;
+}) {
+  const {
+    admin,
+    user_id,
+    site_id = null,
+    domain,
+    status = "pending",
+    dns_records = null,
+    vercel_verified = null,
+    vercel_payload = null,
+    last_error = null,
+  } = args;
 
-  // Required keys:
-  if (!payload.user_id) throw new Error("upsertCustomDomain missing user_id");
-  if (!payload.domain) throw new Error("upsertCustomDomain missing domain");
-
-  const row = {
-    ...payload,
-    updated_at: payload.updated_at || new Date().toISOString(),
+  const payload: any = {
+    user_id,
+    site_id,
+    domain,
+    status,
+    dns_records,
+    vercel_verified,
+    vercel_payload,
+    last_error,
+    updated_at: new Date().toISOString(),
   };
 
   const { data, error } = await admin
     .from("custom_domains")
-    .upsert(row as any, { onConflict: "user_id,domain" } as any)
+    .upsert(payload, { onConflict: "user_id,domain" })
     .select("*")
     .maybeSingle();
 
-  if (error) throw new Error(error.message);
-  return data as any;
+  if (error) throw error;
+  return data;
 }
 
-/**
- * Extract "what DNS should they set" from the Vercel domain config response.
- * Vercel commonly returns `apexName`, `name`, `verified`, and a `verification` array.
- * We'll normalize it into a simple list your UI can show.
- */
-export function extractDnsRecordsFromVercelDomain(vercelDomainJson: any) {
-  const records: Array<{
-    type: "A" | "CNAME" | "TXT";
-    name: string;
-    value: string;
-    ttl?: number;
-    note?: string;
-  }> = [];
-
-  const name = String(vercelDomainJson?.name || "");
-  const apex = String(vercelDomainJson?.apexName || "");
-
-  // Vercel sometimes includes instructions under `verification`
-  const verification = Array.isArray(vercelDomainJson?.verification)
-    ? vercelDomainJson.verification
-    : [];
-
-  for (const v of verification) {
-    // common shapes: { type: 'TXT', domain: '_vercel', value: 'token' } etc.
-    const type = String(v?.type || "").toUpperCase();
-    const recType = (type === "TXT" || type === "A" || type === "CNAME") ? type : "";
-
-    const recName = String(v?.domain || v?.name || "");
-    const value = String(v?.value || "");
-
-    if (recType && recName && value) {
-      records.push({
-        type: recType as any,
-        name: recName,
-        value,
-        note: "From Vercel verification requirements",
-      });
-    }
-  }
-
-  // Fallbacks if verification array is empty:
-  // Typical Vercel pattern: point your domain to Vercel via CNAME for subdomain,
-  // or A record to 76.76.21.21 for apex. (Commonly used by Vercel, but can change.)
-  // We'll only include these as "suggestions" if Vercel didn't provide specifics.
-  if (records.length === 0 && name) {
-    const isApex = apex && name === apex;
-
-    if (isApex) {
-      records.push({
-        type: "A",
-        name: "@",
-        value: "76.76.21.21",
-        note: "Typical Vercel apex A record (fallback). Prefer Vercel-provided instructions if available.",
-      });
-    } else {
-      records.push({
-        type: "CNAME",
-        name: name.split(".")[0] || "www",
-        value: "cname.vercel-dns.com",
-        note: "Typical Vercel CNAME (fallback). Prefer Vercel-provided instructions if available.",
-      });
-    }
-  }
-
-  return records;
-}
 
 
 
