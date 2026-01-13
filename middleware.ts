@@ -1,59 +1,17 @@
-import { NextResponse, type NextRequest } from "next/server";
+ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 export const config = {
-  matcher: [
-    // Run on everything except Next internals + api
-    "/((?!_next|api|favicon.ico|robots.txt|sitemap.xml).*)",
-  ],
+  matcher: ["/builder/:path*", "/sites/:path*", "/templates/:path*", "/domain/:path*"],
 };
 
 function isActive(status: string | null | undefined) {
   return status === "active" || status === "trialing";
 }
 
-function isCustomHost(host: string) {
-  const h = host.toLowerCase();
-  if (!h) return false;
-  if (h.includes("localhost")) return false;
-  if (h.endsWith(".vercel.app")) return false;
-  if (h === "forgesite.net" || h === "www.forgesite.net") return false;
-  if (h.endsWith(".forgesite.net")) return false;
-  return true;
-}
-
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
   const { pathname, search } = req.nextUrl;
-
-  const host = (req.headers.get("host") || "").toLowerCase();
-
-  // ------------------------------------------------------------
-  // 1) HOST ROUTING (subdomains + custom domains) -> hosted site
-  // ------------------------------------------------------------
-  // Subdomain: whatever.forgesite.net
-  if (host.endsWith(".forgesite.net") && host !== "forgesite.net" && host !== "www.forgesite.net") {
-    const sub = host.replace(".forgesite.net", "");
-    const url = req.nextUrl.clone();
-    url.pathname = `/_hosted/subdomain/${sub}${pathname === "/" ? "" : pathname}`;
-    url.search = search; // preserve query
-    return NextResponse.rewrite(url);
-  }
-
-  // Custom domain: customer.com
-  if (isCustomHost(host)) {
-    const url = req.nextUrl.clone();
-    url.pathname = `/_hosted/domain${pathname === "/" ? "" : pathname}`;
-    url.search = `?d=${encodeURIComponent(host)}${search ? `&${search.replace(/^\?/, "")}` : ""}`;
-    return NextResponse.rewrite(url);
-  }
-
-  // ------------------------------------------------------------
-  // 2) AUTH + ENTITLEMENT GATING (only for protected app areas)
-  // ------------------------------------------------------------
-  const protectedPaths = ["/builder", "/sites", "/templates", "/domain"];
-  const isProtected = protectedPaths.some((p) => pathname === p || pathname.startsWith(p + "/"));
-  if (!isProtected) return res;
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -78,6 +36,7 @@ export async function middleware(req: NextRequest) {
 
   const nextParam = encodeURIComponent(pathname + (search || ""));
 
+  // 🔴 ONLY redirect to login if NOT authenticated
   if (!user) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
@@ -85,6 +44,12 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  // 🟢 USER IS AUTHENTICATED — allow /builder to load FIRST
+  if (pathname.startsWith("/builder")) {
+    return res;
+  }
+
+  // 🔴 Check entitlement only AFTER auth
   const { data: ent, error } = await supabase
     .from("entitlements")
     .select("status")
@@ -100,6 +65,7 @@ export async function middleware(req: NextRequest) {
 
   return res;
 }
+
 
 
 
