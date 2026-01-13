@@ -3,12 +3,12 @@ import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
-function jsonError(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status });
-}
+// ✅ IMPORTANT: force dynamic (because we read request.headers)
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
-function isActive(status: string | null | undefined) {
-  return status === "active" || status === "trialing";
+function jsonErr(message: string, status = 400) {
+  return NextResponse.json({ error: message }, { status });
 }
 
 export async function GET(req: Request) {
@@ -18,40 +18,36 @@ export async function GET(req: Request) {
       ? authHeader.slice("Bearer ".length).trim()
       : "";
 
-    if (!token) return jsonError("Missing Authorization Bearer token", 401);
+    if (!token) return jsonErr("Auth session missing", 401);
 
-    // ✅ IMPORTANT: get the admin client instance
     const admin = getSupabaseAdmin();
 
-    // ✅ Validate user from JWT
+    // ✅ Validate token using service role Supabase client
     const { data: userData, error: userErr } = await admin.auth.getUser(token);
     const user = userData?.user;
 
-    if (userErr || !user) {
-      return jsonError("Invalid session", 401);
-    }
+    if (userErr || !user) return jsonErr("Invalid session", 401);
 
-    // ✅ Read entitlement row
+    // ✅ Fetch entitlement row
     const { data: ent, error: entErr } = await admin
       .from("entitlements")
       .select("status, current_period_end")
       .eq("user_id", user.id)
       .maybeSingle();
 
-    if (entErr) return jsonError(entErr.message, 500);
+    if (entErr) return jsonErr(entErr.message, 500);
 
-    const status = ent?.status ?? null;
-    const active = isActive(status);
+    const status = (ent?.status as string | null) || "inactive";
 
     return NextResponse.json({
+      ok: true,
       user_id: user.id,
-      active,
       status,
       current_period_end: ent?.current_period_end ?? null,
+      active: status === "active" || status === "trialing",
     });
   } catch (err: any) {
-    console.error("ENTITLEMENT_ROUTE_ERROR:", err);
-    return jsonError(err?.message || "Entitlement route crashed", 500);
+    return jsonErr(err?.message || "Entitlement route crashed", 500);
   }
 }
 
