@@ -191,7 +191,7 @@ export default function DomainClient() {
               Check status
             </button>
             <button style={secondaryBtn} onClick={connect} disabled={!token}>
-              Connect in Vercel
+              Connect 
             </button>
           </div>
 
@@ -279,6 +279,7 @@ const pre: React.CSSProperties = {
   maxHeight: 420,
   fontSize: 12,
 };
+
 
 
 
