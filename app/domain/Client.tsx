@@ -1,15 +1,9 @@
+// app/domain/Client.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
-
-function getSupabase() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-  if (!url || !anon) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
-  return createClient(url, anon);
-}
+import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 async function readJson(res: Response) {
   const text = await res.text();
@@ -36,10 +30,12 @@ export default function DomainClient() {
   const [msg, setMsg] = useState("");
   const [details, setDetails] = useState<any>(null);
 
+  // ✅ IMPORTANT: use the shared cookie-based browser client
   useEffect(() => {
     const run = async () => {
       try {
-        const supabase = getSupabase();
+        const supabase = createSupabaseBrowserClient();
+
         const { data } = await supabase.auth.getSession();
         const session = data?.session;
 
@@ -54,6 +50,7 @@ export default function DomainClient() {
         router.replace("/login?next=/domain");
       }
     };
+
     run();
   }, [router]);
 
@@ -75,9 +72,13 @@ export default function DomainClient() {
 
   async function requestDomain() {
     if (!domain.trim()) return setMsg("Enter a domain first.");
+    if (!token) return setMsg("Not signed in.");
     setBusy("Requesting…");
 
-    const r = await call("/api/domain/request", { domain: domain.trim(), site_id: siteId || null });
+    const r = await call("/api/domain/request", {
+      domain: domain.trim(),
+      site_id: siteId || null,
+    });
 
     if (!r.ok) {
       setBusy("");
@@ -93,6 +94,7 @@ export default function DomainClient() {
 
   async function checkStatus() {
     if (!domain.trim()) return setMsg("Enter a domain first.");
+    if (!token) return setMsg("Not signed in.");
     setBusy("Checking status…");
 
     const r = await call("/api/domain/status", { domain: domain.trim() });
@@ -111,6 +113,7 @@ export default function DomainClient() {
 
   async function verify() {
     if (!domain.trim()) return setMsg("Enter a domain first.");
+    if (!token) return setMsg("Not signed in.");
     setBusy("Verifying…");
 
     const r = await call("/api/domain/verify", { domain: domain.trim() });
@@ -129,6 +132,7 @@ export default function DomainClient() {
 
   async function connect() {
     if (!domain.trim()) return setMsg("Enter a domain first.");
+    if (!token) return setMsg("Not signed in.");
     setBusy("Connecting…");
 
     const r = await call("/api/domain/connect", { domain: domain.trim() });
@@ -191,7 +195,7 @@ export default function DomainClient() {
               Check status
             </button>
             <button style={secondaryBtn} onClick={connect} disabled={!token}>
-              Connect 
+              Connect
             </button>
           </div>
 
@@ -279,6 +283,10 @@ const pre: React.CSSProperties = {
   maxHeight: 420,
   fontSize: 12,
 };
+
+
+
+
 
 
 
