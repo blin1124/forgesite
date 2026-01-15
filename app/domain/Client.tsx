@@ -1,11 +1,17 @@
-// app/domain/Client.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
-async function readJson(res: Response) {
+type ApiResult = {
+  ok: boolean;
+  status: number;
+  json: any;
+  text: string;
+};
+
+async function readJson(res: Response): Promise<ApiResult> {
   const text = await res.text();
   let json: any = {};
   try {
@@ -14,6 +20,14 @@ async function readJson(res: Response) {
     json = { raw: text };
   }
   return { ok: res.ok, status: res.status, json, text };
+}
+
+function normalizeDomainInput(v: string) {
+  let d = (v || "").trim().toLowerCase();
+  d = d.replace(/^https?:\/\//, "");
+  d = d.replace(/^www\./, "");
+  d = d.split("/")[0] || "";
+  return d;
 }
 
 export default function DomainClient() {
@@ -26,16 +40,20 @@ export default function DomainClient() {
   const [email, setEmail] = useState("");
 
   const [domain, setDomain] = useState("");
-  const [busy, setBusy] = useState("");
-  const [msg, setMsg] = useState("");
+  const normDomain = useMemo(() => normalizeDomainInput(domain), [domain]);
+
+  const [busy, setBusy] = useState<string>("");
+  const [msg, setMsg] = useState<string>("");
   const [details, setDetails] = useState<any>(null);
 
-  // ✅ IMPORTANT: use the shared cookie-based browser client
+  // Track progress to encourage correct order
+  const [hasRequested, setHasRequested] = useState(false);
+  const [hasVerified, setHasVerified] = useState(false);
+
   useEffect(() => {
     const run = async () => {
       try {
         const supabase = createSupabaseBrowserClient();
-
         const { data } = await supabase.auth.getSession();
         const session = data?.session;
 
@@ -50,7 +68,6 @@ export default function DomainClient() {
         router.replace("/login?next=/domain");
       }
     };
-
     run();
   }, [router]);
 
@@ -70,78 +87,107 @@ export default function DomainClient() {
     return readJson(res);
   }
 
-  async function requestDomain() {
-    if (!domain.trim()) return setMsg("Enter a domain first.");
-    if (!token) return setMsg("Not signed in.");
-    setBusy("Requesting…");
+  function showError(r: ApiResult, fallback: string) {
+    const apiErr =
+      r.json?.error ||
+      r.json?.message ||
+      r.json?.details?.error?.message ||
+      r.json?.details?.error?.code ||
+      fallback;
+
+    setBusy("");
+    setMsg(typeof apiErr === "string" ? apiErr : fallback);
+    setDetails(r.json ?? { raw: r.text });
+  }
+
+  async function requestDnsRecords() {
+    if (!normDomain) return setMsg("Enter a domain first.");
+    setBusy("Requesting DNS records…");
 
     const r = await call("/api/domain/request", {
-      domain: domain.trim(),
+      domain: normDomain,
       site_id: siteId || null,
     });
 
-    if (!r.ok) {
-      setBusy("");
-      setMsg(r.json?.error || `Request failed (${r.status})`);
-      setDetails(r.json);
-      return;
+    if (!r.ok) return showError(r, `Request failed (${r.status})`);
+
+    // Many implementations return dns_records here; if present, we can mark requested.
+    setHasRequested(true);
+    setBusy("");
+    setMsg("Requested ✅ Add the DNS records shown below at your domain registrar, then click Verify.");
+    setDetails(r.json);
+  }
+
+  async function verifyDns() {
+    if (!normDomain) return setMsg("Enter a domain first.");
+    if (!hasRequested) {
+      // still allow, but warn
+      setMsg("Tip: Usually you click Request DNS records first, add them, then Verify.");
     }
 
+    setBusy("Verifying DNS…");
+    const r = await call("/api/domain/verify", { domain: normDomain });
+
+    if (!r.ok) return showError(r, `Verify failed (${r.status})`);
+
+    // Your API likely returns vercel_verified or similar; we set local flag regardless.
+    setHasVerified(true);
     setBusy("");
-    setMsg("Requested ✅ Now add the DNS records shown below, then click Verify.");
+    setMsg("Verified ✅ Now you can Connect.");
     setDetails(r.json);
   }
 
   async function checkStatus() {
-    if (!domain.trim()) return setMsg("Enter a domain first.");
-    if (!token) return setMsg("Not signed in.");
+    if (!normDomain) return setMsg("Enter a domain first.");
     setBusy("Checking status…");
 
-    const r = await call("/api/domain/status", { domain: domain.trim() });
+    const r = await call("/api/domain/status", { domain: normDomain });
 
-    if (!r.ok) {
-      setBusy("");
-      setMsg(r.json?.error || `Status failed (${r.status})`);
-      setDetails(r.json);
-      return;
-    }
+    if (!r.ok) return showError(r, `Status failed (${r.status})`);
+
+    // If API reports verified, reflect it
+    const v =
+      Boolean(r.json?.domain?.verified) ||
+      Boolean(r.json?.vercel_verified) ||
+      Boolean(r.json?.verified);
+
+    if (v) setHasVerified(true);
 
     setBusy("");
     setMsg("Status updated ✅");
     setDetails(r.json);
   }
 
-  async function verify() {
-    if (!domain.trim()) return setMsg("Enter a domain first.");
-    if (!token) return setMsg("Not signed in.");
-    setBusy("Verifying…");
-
-    const r = await call("/api/domain/verify", { domain: domain.trim() });
-
-    if (!r.ok) {
-      setBusy("");
-      setMsg(r.json?.error || `Verify failed (${r.status})`);
-      setDetails(r.json);
+  async function connectDomain() {
+    if (!normDomain) return setMsg("Enter a domain first.");
+    if (!hasVerified) {
+      setMsg("Verify DNS first (or run Check status) before connecting.");
       return;
     }
 
-    setBusy("");
-    setMsg("Verify complete ✅");
-    setDetails(r.json);
-  }
-
-  async function connect() {
-    if (!domain.trim()) return setMsg("Enter a domain first.");
-    if (!token) return setMsg("Not signed in.");
     setBusy("Connecting…");
-
-    const r = await call("/api/domain/connect", { domain: domain.trim() });
+    const r = await call("/api/domain/connect", { domain: normDomain });
 
     if (!r.ok) {
-      setBusy("");
-      setMsg(r.json?.error || `Connect failed (${r.status})`);
-      setDetails(r.json);
-      return;
+      // Special-case: domain already added to a project
+      const code = r.json?.details?.error?.code || r.json?.error?.code;
+      const message = r.json?.error || r.json?.details?.error?.message;
+
+      if (String(message || "").toLowerCase().includes("already in use")) {
+        setBusy("");
+        setMsg("This domain is already connected. Use Check status (or remove it from the other project) then try again.");
+        setDetails(r.json);
+        return;
+      }
+
+      if (code === "domain_already_in_use") {
+        setBusy("");
+        setMsg("This domain is already connected somewhere. If you own it, remove it from the other project and try again.");
+        setDetails(r.json);
+        return;
+      }
+
+      return showError(r, `Connect failed (${r.status})`);
     }
 
     setBusy("");
@@ -177,6 +223,7 @@ export default function DomainClient() {
           <label style={{ fontWeight: 900, display: "block", marginBottom: 8 }}>
             Domain (example: customer.com)
           </label>
+
           <input
             value={domain}
             onChange={(e) => setDomain(e.target.value)}
@@ -184,19 +231,30 @@ export default function DomainClient() {
             style={input}
           />
 
+          <div style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>
+            We’ll use: <b>{normDomain || "—"}</b>
+          </div>
+
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
-            <button style={primaryBtn} onClick={requestDomain} disabled={!token}>
+            <button style={primaryBtn} onClick={requestDnsRecords} disabled={!token || !normDomain}>
               Request DNS records
             </button>
-            <button style={secondaryBtn} onClick={verify} disabled={!token}>
+
+            <button style={secondaryBtn} onClick={verifyDns} disabled={!token || !normDomain}>
               Verify DNS
             </button>
-            <button style={secondaryBtn} onClick={checkStatus} disabled={!token}>
+
+            <button style={secondaryBtn} onClick={checkStatus} disabled={!token || !normDomain}>
               Check status
             </button>
-            <button style={secondaryBtn} onClick={connect} disabled={!token}>
+
+            <button style={secondaryBtn} onClick={connectDomain} disabled={!token || !normDomain}>
               Connect
             </button>
+          </div>
+
+          <div style={{ marginTop: 10, fontSize: 13, opacity: 0.9 }}>
+            Recommended order: <b>Request DNS records</b> → update DNS at registrar → <b>Verify DNS</b> → <b>Connect</b>.
           </div>
 
           {busy ? <div style={note}>{busy}</div> : null}
@@ -206,7 +264,7 @@ export default function DomainClient() {
             <pre style={pre}>{JSON.stringify(details, null, 2)}</pre>
           ) : (
             <div style={{ marginTop: 14, opacity: 0.85, fontSize: 13 }}>
-              Tip: Click <b>Request DNS records</b>, add them in GoDaddy, then click <b>Verify DNS</b>.
+              Tip: Click <b>Request DNS records</b>, add them in your registrar (GoDaddy), then click <b>Verify DNS</b>.
             </div>
           )}
         </div>
@@ -271,6 +329,7 @@ const note: React.CSSProperties = {
   borderRadius: 12,
   background: "rgba(0,0,0,0.22)",
   border: "1px solid rgba(255,255,255,0.14)",
+  whiteSpace: "pre-wrap",
 };
 
 const pre: React.CSSProperties = {
@@ -283,6 +342,8 @@ const pre: React.CSSProperties = {
   maxHeight: 420,
   fontSize: 12,
 };
+
+
 
 
 
