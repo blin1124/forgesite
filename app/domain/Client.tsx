@@ -4,16 +4,16 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
-type ApiResult = {
-  ok: boolean;
-  status: number;
-  json: any;
-  text: string;
+type DnsRecord = {
+  type: string;      // A, CNAME, TXT, etc
+  name: string;      // @, www, _verification, etc
+  value: string;     // target value
+  ttl?: number | null;
 };
 
-async function readJson(res: Response): Promise<ApiResult> {
+async function readJson(res: Response) {
   const text = await res.text();
-  let json: any = {};
+  let json: any = null;
   try {
     json = JSON.parse(text);
   } catch {
@@ -22,12 +22,12 @@ async function readJson(res: Response): Promise<ApiResult> {
   return { ok: res.ok, status: res.status, json, text };
 }
 
-function normalizeDomainInput(v: string) {
-  let d = (v || "").trim().toLowerCase();
-  d = d.replace(/^https?:\/\//, "");
-  d = d.replace(/^www\./, "");
-  d = d.split("/")[0] || "";
-  return d;
+function normalizeInputDomain(raw: string) {
+  const d = (raw || "").trim().toLowerCase();
+  // strip protocol + path if user pastes full URL
+  const noProto = d.replace(/^https?:\/\//, "");
+  const noPath = noProto.split("/")[0] || "";
+  return noPath;
 }
 
 export default function DomainClient() {
@@ -40,15 +40,16 @@ export default function DomainClient() {
   const [email, setEmail] = useState("");
 
   const [domain, setDomain] = useState("");
-  const normDomain = useMemo(() => normalizeDomainInput(domain), [domain]);
+  const cleanDomain = useMemo(() => normalizeInputDomain(domain), [domain]);
 
   const [busy, setBusy] = useState<string>("");
   const [msg, setMsg] = useState<string>("");
-  const [details, setDetails] = useState<any>(null);
+  const [isError, setIsError] = useState(false);
 
-  // Track progress to encourage correct order
-  const [hasRequested, setHasRequested] = useState(false);
-  const [hasVerified, setHasVerified] = useState(false);
+  const [details, setDetails] = useState<any>(null);
+  const [showDetails, setShowDetails] = useState(false);
+
+  const [dnsRecords, setDnsRecords] = useState<DnsRecord[] | null>(null);
 
   useEffect(() => {
     const run = async () => {
@@ -73,7 +74,9 @@ export default function DomainClient() {
 
   async function call(path: string, body: any) {
     setMsg("");
+    setIsError(false);
     setDetails(null);
+    setDnsRecords(null);
 
     const res = await fetch(path, {
       method: "POST",
@@ -87,112 +90,136 @@ export default function DomainClient() {
     return readJson(res);
   }
 
-  function showError(r: ApiResult, fallback: string) {
-    const apiErr =
-      r.json?.error ||
-      r.json?.message ||
-      r.json?.details?.error?.message ||
-      r.json?.details?.error?.code ||
-      fallback;
-
+  function setOk(message: string, payload?: any) {
     setBusy("");
-    setMsg(typeof apiErr === "string" ? apiErr : fallback);
-    setDetails(r.json ?? { raw: r.text });
+    setIsError(false);
+    setMsg(message);
+    setDetails(payload ?? null);
   }
 
-  async function requestDnsRecords() {
-    if (!normDomain) return setMsg("Enter a domain first.");
+  function setFail(message: string, payload?: any) {
+    setBusy("");
+    setIsError(true);
+    setMsg(message);
+    setDetails(payload ?? null);
+  }
+
+  async function requestDomain() {
+    if (!cleanDomain) return setFail("Enter a domain first.");
+    if (!token) return setFail("Not signed in.");
+
     setBusy("Requesting DNS records…");
 
     const r = await call("/api/domain/request", {
-      domain: normDomain,
+      domain: cleanDomain,
       site_id: siteId || null,
     });
 
-    if (!r.ok) return showError(r, `Request failed (${r.status})`);
-
-    // Many implementations return dns_records here; if present, we can mark requested.
-    setHasRequested(true);
-    setBusy("");
-    setMsg("Requested ✅ Add the DNS records shown below at your domain registrar, then click Verify.");
-    setDetails(r.json);
-  }
-
-  async function verifyDns() {
-    if (!normDomain) return setMsg("Enter a domain first.");
-    if (!hasRequested) {
-      // still allow, but warn
-      setMsg("Tip: Usually you click Request DNS records first, add them, then Verify.");
+    if (!r.ok) {
+      const m = r.json?.error || `Request failed (${r.status})`;
+      return setFail(m, r.json);
     }
 
-    setBusy("Verifying DNS…");
-    const r = await call("/api/domain/verify", { domain: normDomain });
+    // Try to extract dns records from common shapes
+    const records =
+      (Array.isArray(r.json?.dns_records) ? r.json.dns_records : null) ||
+      (Array.isArray(r.json?.records) ? r.json.records : null) ||
+      (Array.isArray(r.json?.config?.records) ? r.json.config.records : null) ||
+      null;
 
-    if (!r.ok) return showError(r, `Verify failed (${r.status})`);
-
-    // Your API likely returns vercel_verified or similar; we set local flag regardless.
-    setHasVerified(true);
-    setBusy("");
-    setMsg("Verified ✅ Now you can Connect.");
-    setDetails(r.json);
-  }
-
-  async function checkStatus() {
-    if (!normDomain) return setMsg("Enter a domain first.");
-    setBusy("Checking status…");
-
-    const r = await call("/api/domain/status", { domain: normDomain });
-
-    if (!r.ok) return showError(r, `Status failed (${r.status})`);
-
-    // If API reports verified, reflect it
-    const v =
-      Boolean(r.json?.domain?.verified) ||
-      Boolean(r.json?.vercel_verified) ||
-      Boolean(r.json?.verified);
-
-    if (v) setHasVerified(true);
-
-    setBusy("");
-    setMsg("Status updated ✅");
-    setDetails(r.json);
-  }
-
-  async function connectDomain() {
-    if (!normDomain) return setMsg("Enter a domain first.");
-    if (!hasVerified) {
-      setMsg("Verify DNS first (or run Check status) before connecting.");
+    if (records && Array.isArray(records)) {
+      setDnsRecords(records);
+      setOk("DNS records generated ✅ Add these at your registrar (GoDaddy), then click Verify DNS.", r.json);
       return;
     }
 
-    setBusy("Connecting…");
-    const r = await call("/api/domain/connect", { domain: normDomain });
+    // If backend returns no records, still guide user
+    setOk("Requested ✅ Now add the DNS records your system provides, then click Verify DNS.", r.json);
+  }
+
+  async function verify() {
+    if (!cleanDomain) return setFail("Enter a domain first.");
+    if (!token) return setFail("Not signed in.");
+
+    setBusy("Verifying DNS…");
+
+    const r = await call("/api/domain/verify", { domain: cleanDomain });
 
     if (!r.ok) {
-      // Special-case: domain already added to a project
-      const code = r.json?.details?.error?.code || r.json?.error?.code;
-      const message = r.json?.error || r.json?.details?.error?.message;
-
-      if (String(message || "").toLowerCase().includes("already in use")) {
-        setBusy("");
-        setMsg("This domain is already connected. Use Check status (or remove it from the other project) then try again.");
-        setDetails(r.json);
-        return;
-      }
-
-      if (code === "domain_already_in_use") {
-        setBusy("");
-        setMsg("This domain is already connected somewhere. If you own it, remove it from the other project and try again.");
-        setDetails(r.json);
-        return;
-      }
-
-      return showError(r, `Connect failed (${r.status})`);
+      const m = r.json?.error || `Verify failed (${r.status})`;
+      return setFail(m, r.json);
     }
 
+    // If verify returns records, show them too
+    const records =
+      (Array.isArray(r.json?.dns_records) ? r.json.dns_records : null) ||
+      (Array.isArray(r.json?.records) ? r.json.records : null) ||
+      null;
+
+    if (records && Array.isArray(records)) setDnsRecords(records);
+
+    setOk("Verify complete ✅ If it’s still pending, wait a bit and click Check status.", r.json);
+  }
+
+  async function checkStatus() {
+    if (!cleanDomain) return setFail("Enter a domain first.");
+    if (!token) return setFail("Not signed in.");
+
+    setBusy("Checking status…");
+
+    const r = await call("/api/domain/status", { domain: cleanDomain });
+
+    if (!r.ok) {
+      const m = r.json?.error || `Status failed (${r.status})`;
+      return setFail(m, r.json);
+    }
+
+    const status = String(r.json?.status || "unknown");
+    const verified = Boolean(r.json?.vercel_verified ?? r.json?.verified ?? false);
+
+    // Capture records if returned
+    const records =
+      (Array.isArray(r.json?.dns_records) ? r.json.dns_records : null) ||
+      (Array.isArray(r.json?.records) ? r.json.records : null) ||
+      null;
+
+    if (records && Array.isArray(records)) setDnsRecords(records);
+
+    setOk(`Status updated ✅ (${status}${verified ? ", verified" : ""})`, r.json);
+  }
+
+  async function connect() {
+    if (!cleanDomain) return setFail("Enter a domain first.");
+    if (!token) return setFail("Not signed in.");
+
+    setBusy("Connecting…");
+
+    const r = await call("/api/domain/connect", { domain: cleanDomain });
+
+    if (!r.ok) {
+      const m = r.json?.error || `Connect failed (${r.status})`;
+
+      // Common friendly guidance
+      if (String(r.json?.details?.error?.code || "").includes("domain_already_in_use")) {
+        return setFail(
+          "That domain is already attached to one of your projects. Remove it from the project Domains list first, then try again.",
+          r.json
+        );
+      }
+
+      return setFail(m, r.json);
+    }
+
+    setOk("Connected ✅ Your domain is now attached.", r.json);
+  }
+
+  function resetUi() {
     setBusy("");
-    setMsg("Connected ✅");
-    setDetails(r.json);
+    setMsg("");
+    setIsError(false);
+    setDetails(null);
+    setDnsRecords(null);
+    setShowDetails(false);
   }
 
   return (
@@ -212,136 +239,8 @@ export default function DomainClient() {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <button onClick={() => router.push("/builder")} style={secondaryBtn}>
-              Back to Builder
-            </button>
-          </div>
-        </div>
+          <div style={{ display: "flex", gap: 10
 
-        <div style={{ marginTop: 16 }}>
-          <label style={{ fontWeight: 900, display: "block", marginBottom: 8 }}>
-            Domain (example: customer.com)
-          </label>
-
-          <input
-            value={domain}
-            onChange={(e) => setDomain(e.target.value)}
-            placeholder="yourdomain.com"
-            style={input}
-          />
-
-          <div style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>
-            We’ll use: <b>{normDomain || "—"}</b>
-          </div>
-
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
-            <button style={primaryBtn} onClick={requestDnsRecords} disabled={!token || !normDomain}>
-              Request DNS records
-            </button>
-
-            <button style={secondaryBtn} onClick={verifyDns} disabled={!token || !normDomain}>
-              Verify DNS
-            </button>
-
-            <button style={secondaryBtn} onClick={checkStatus} disabled={!token || !normDomain}>
-              Check status
-            </button>
-
-            <button style={secondaryBtn} onClick={connectDomain} disabled={!token || !normDomain}>
-              Connect
-            </button>
-          </div>
-
-          <div style={{ marginTop: 10, fontSize: 13, opacity: 0.9 }}>
-            Recommended order: <b>Request DNS records</b> → update DNS at registrar → <b>Verify DNS</b> → <b>Connect</b>.
-          </div>
-
-          {busy ? <div style={note}>{busy}</div> : null}
-          {msg ? <div style={note}>{msg}</div> : null}
-
-          {details ? (
-            <pre style={pre}>{JSON.stringify(details, null, 2)}</pre>
-          ) : (
-            <div style={{ marginTop: 14, opacity: 0.85, fontSize: 13 }}>
-              Tip: Click <b>Request DNS records</b>, add them in your registrar (GoDaddy), then click <b>Verify DNS</b>.
-            </div>
-          )}
-        </div>
-      </div>
-    </main>
-  );
-}
-
-const page: React.CSSProperties = {
-  minHeight: "100vh",
-  padding: 24,
-  color: "white",
-  background:
-    "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(124,58,237) 0%, rgb(109,40,217) 35%, rgb(91,33,182) 100%)",
-  fontFamily:
-    'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
-};
-
-const card: React.CSSProperties = {
-  maxWidth: 920,
-  margin: "0 auto",
-  background: "rgba(255,255,255,0.10)",
-  border: "1px solid rgba(255,255,255,0.18)",
-  borderRadius: 18,
-  padding: 18,
-  boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
-};
-
-const input: React.CSSProperties = {
-  width: "100%",
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.25)",
-  background: "rgba(255,255,255,0.14)",
-  color: "white",
-  outline: "none",
-};
-
-const primaryBtn: React.CSSProperties = {
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.18)",
-  background: "rgba(255,255,255,0.92)",
-  color: "rgb(85, 40, 150)",
-  fontWeight: 900,
-  cursor: "pointer",
-};
-
-const secondaryBtn: React.CSSProperties = {
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.25)",
-  background: "rgba(255,255,255,0.14)",
-  color: "white",
-  fontWeight: 900,
-  cursor: "pointer",
-};
-
-const note: React.CSSProperties = {
-  marginTop: 12,
-  padding: 12,
-  borderRadius: 12,
-  background: "rgba(0,0,0,0.22)",
-  border: "1px solid rgba(255,255,255,0.14)",
-  whiteSpace: "pre-wrap",
-};
-
-const pre: React.CSSProperties = {
-  marginTop: 14,
-  padding: 12,
-  borderRadius: 12,
-  background: "rgba(0,0,0,0.35)",
-  border: "1px solid rgba(255,255,255,0.14)",
-  overflow: "auto",
-  maxHeight: 420,
-  fontSize: 12,
-};
 
 
 
