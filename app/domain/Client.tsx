@@ -2,28 +2,18 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
+import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
-export const dynamic = "force-dynamic";
-
-function getSupabase() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-  if (!url || !anon) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
-  return createClient(url, anon);
-}
-
-function normalizeDomainInput(v: string) {
-  let d = (v || "").trim().toLowerCase();
-  d = d.replace(/^https?:\/\//, "");
-  d = d.replace(/\/.*$/, "");
-  d = d.replace(/\.$/, "");
-  return d;
-}
+type DnsRecord = {
+  type: string; // A, CNAME, TXT
+  name: string; // @, www, _vercel, etc
+  value: string; // target
+  ttl?: number | null;
+};
 
 async function readJson(res: Response) {
   const text = await res.text();
-  let json: any = {};
+  let json: any = null;
   try {
     json = JSON.parse(text);
   } catch {
@@ -32,32 +22,37 @@ async function readJson(res: Response) {
   return { ok: res.ok, status: res.status, json, text };
 }
 
-function friendlyErrorMessage(payload: any): string {
-  const msg =
-    payload?.error ||
-    payload?.message ||
-    payload?.details?.error?.message ||
-    payload?.details?.message ||
-    payload?.details?.error?.code ||
-    "Request failed.";
+function normalizeInputDomain(raw: string) {
+  const d = (raw || "").trim().toLowerCase();
+  const noProto = d.replace(/^https?:\/\//, "");
+  const noPath = noProto.split("/")[0] || "";
+  return noPath;
+}
 
-  const code = payload?.details?.error?.code || payload?.code;
+function pickRecords(payload: any): DnsRecord[] | null {
+  if (!payload) return null;
 
-  if (code === "domain_already_in_use" || String(msg).toLowerCase().includes("already in use")) {
-    return (
-      "That domain is already attached to one of your projects. " +
-      "Remove it from Vercel → Project → Settings → Domains (or any other project it’s on), then try again."
-    );
+  const candidates = [
+    payload?.dns_records,
+    payload?.records,
+    payload?.config?.records,
+    payload?.verification?.records,
+  ];
+
+  for (const c of candidates) {
+    if (Array.isArray(c)) {
+      // Normalize shape
+      return c
+        .map((r: any) => ({
+          type: String(r?.type || "").toUpperCase(),
+          name: String(r?.name || r?.host || ""),
+          value: String(r?.value || r?.data || r?.target || ""),
+          ttl: r?.ttl ?? null,
+        }))
+        .filter((r: DnsRecord) => r.type && r.name !== undefined && r.value !== undefined);
+    }
   }
-
-  if (String(msg).toLowerCase().includes("schema cache")) {
-    return (
-      "Your database just changed (new columns). Supabase can take a few minutes to refresh schema cache. " +
-      "Wait 2–5 minutes, then try again."
-    );
-  }
-
-  return String(msg);
+  return null;
 }
 
 export default function DomainClient() {
@@ -69,18 +64,22 @@ export default function DomainClient() {
   const [token, setToken] = useState("");
   const [email, setEmail] = useState("");
 
-  const [domainInput, setDomainInput] = useState("");
-  const domain = useMemo(() => normalizeDomainInput(domainInput), [domainInput]);
+  const [domain, setDomain] = useState("");
+  const cleanDomain = useMemo(() => normalizeInputDomain(domain), [domain]);
 
   const [busy, setBusy] = useState<string>("");
   const [msg, setMsg] = useState<string>("");
+  const [isError, setIsError] = useState(false);
+
   const [details, setDetails] = useState<any>(null);
   const [showDetails, setShowDetails] = useState(false);
+
+  const [dnsRecords, setDnsRecords] = useState<DnsRecord[] | null>(null);
 
   useEffect(() => {
     const run = async () => {
       try {
-        const supabase = getSupabase();
+        const supabase = createSupabaseBrowserClient();
         const { data } = await supabase.auth.getSession();
         const session = data?.session;
 
@@ -100,7 +99,9 @@ export default function DomainClient() {
 
   async function call(path: string, body: any) {
     setMsg("");
+    setIsError(false);
     setDetails(null);
+    setDnsRecords(null);
 
     const res = await fetch(path, {
       method: "POST",
@@ -114,103 +115,110 @@ export default function DomainClient() {
     return readJson(res);
   }
 
-  function requireDomain(): boolean {
-    if (!domain) {
-      setMsg("Enter a domain first.");
-      return false;
-    }
-    if (!domain.includes(".")) {
-      setMsg("That doesn’t look like a real domain (missing a dot). Example: customer.com");
-      return false;
-    }
-    return true;
+  function ok(message: string, payload?: any) {
+    setBusy("");
+    setIsError(false);
+    setMsg(message);
+    setDetails(payload ?? null);
   }
 
-  async function requestDns() {
-    if (!requireDomain()) return;
-    setBusy("Requesting DNS records…");
-    setShowDetails(false);
-
-    const r = await call("/api/domain/request", { domain, site_id: siteId || null });
-
+  function fail(message: string, payload?: any) {
     setBusy("");
+    setIsError(true);
+    setMsg(message);
+    setDetails(payload ?? null);
+  }
+
+  async function requestDomain() {
+    if (!cleanDomain) return fail("Enter a domain first.");
+    if (!token) return fail("Not signed in.");
+
+    setBusy("Requesting DNS records…");
+
+    const r = await call("/api/domain/request", {
+      domain: cleanDomain,
+      site_id: siteId || null,
+    });
+
     if (!r.ok) {
-      setMsg(friendlyErrorMessage(r.json));
-      setDetails(r.json);
-      return;
+      return fail(r.json?.error || `Request failed (${r.status})`, r.json);
     }
 
-    setMsg("DNS records created ✅ Add the records at your registrar, then click Verify DNS.");
-    setDetails(r.json);
+    const recs = pickRecords(r.json);
+    if (recs?.length) setDnsRecords(recs);
+
+    ok("DNS records generated ✅ Add these at your registrar (GoDaddy), then click Verify DNS.", r.json);
   }
 
   async function verifyDns() {
-    if (!requireDomain()) return;
+    if (!cleanDomain) return fail("Enter a domain first.");
+    if (!token) return fail("Not signed in.");
+
     setBusy("Verifying DNS…");
-    setShowDetails(false);
 
-    const r = await call("/api/domain/verify", { domain });
+    const r = await call("/api/domain/verify", { domain: cleanDomain });
 
-    setBusy("");
     if (!r.ok) {
-      setMsg(friendlyErrorMessage(r.json));
-      setDetails(r.json);
-      return;
+      return fail(r.json?.error || `Verify failed (${r.status})`, r.json);
     }
 
-    setMsg("Verify complete ✅ If it’s pending, wait a bit and click Check status.");
-    setDetails(r.json);
+    const recs = pickRecords(r.json);
+    if (recs?.length) setDnsRecords(recs);
+
+    ok("Verify complete ✅ If it’s pending, wait a bit and click Check status.", r.json);
   }
 
   async function checkStatus() {
-    if (!requireDomain()) return;
+    if (!cleanDomain) return fail("Enter a domain first.");
+    if (!token) return fail("Not signed in.");
+
     setBusy("Checking status…");
-    setShowDetails(false);
 
-    const r = await call("/api/domain/status", { domain });
+    const r = await call("/api/domain/status", { domain: cleanDomain });
 
-    setBusy("");
     if (!r.ok) {
-      setMsg(friendlyErrorMessage(r.json));
-      setDetails(r.json);
-      return;
+      return fail(r.json?.error || `Status failed (${r.status})`, r.json);
     }
 
-    setMsg("Status updated ✅");
-    setDetails(r.json);
+    const recs = pickRecords(r.json);
+    if (recs?.length) setDnsRecords(recs);
+
+    const status = String(r.json?.status || "unknown");
+    const verified = Boolean(r.json?.vercel_verified ?? r.json?.verified ?? false);
+
+    ok(`Status updated ✅ (${status}${verified ? ", verified" : ""})`, r.json);
   }
 
-  async function connect() {
-    if (!requireDomain()) return;
+  async function connectDomain() {
+    if (!cleanDomain) return fail("Enter a domain first.");
+    if (!token) return fail("Not signed in.");
+
     setBusy("Connecting…");
-    setShowDetails(false);
 
-    const r = await call("/api/domain/connect", { domain });
+    const r = await call("/api/domain/connect", { domain: cleanDomain });
 
-    setBusy("");
     if (!r.ok) {
-      setMsg(friendlyErrorMessage(r.json));
-      setDetails(r.json);
-      return;
+      const code = String(r.json?.details?.error?.code || "");
+      if (code.includes("domain_already_in_use")) {
+        return fail(
+          "That domain is already attached to one of your projects. Remove it from Vercel → Project → Settings → Domains, then try again.",
+          r.json
+        );
+      }
+      return fail(r.json?.error || `Connect failed (${r.status})`, r.json);
     }
 
-    setMsg("Connected ✅ Your site should now load on this domain once DNS propagates.");
-    setDetails(r.json);
+    ok("Connected ✅", r.json);
   }
 
-  function reset() {
-    setDomainInput("");
+  function resetUi() {
     setBusy("");
     setMsg("");
+    setIsError(false);
     setDetails(null);
+    setDnsRecords(null);
     setShowDetails(false);
   }
-
-  const connectLabel = "Connect";
-
-  const isError = msg.toLowerCase().includes("already attached") || msg.toLowerCase().includes("failed");
-  const hint =
-    "Recommended order: Request DNS records → update DNS at registrar → Verify DNS → Connect.";
 
   return (
     <main style={page}>
@@ -229,11 +237,11 @@ export default function DomainClient() {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             <button onClick={() => router.push("/builder")} style={secondaryBtn}>
               Back to Builder
             </button>
-            <button onClick={reset} style={secondaryBtn}>
+            <button onClick={resetUi} style={secondaryBtn}>
               Reset
             </button>
           </div>
@@ -245,32 +253,35 @@ export default function DomainClient() {
           </label>
 
           <input
-            value={domainInput}
-            onChange={(e) => setDomainInput(e.target.value)}
+            value={domain}
+            onChange={(e) => setDomain(e.target.value)}
             placeholder="yourdomain.com"
             style={input}
           />
 
-          {domain ? (
-            <div style={{ marginTop: 8, opacity: 0.9, fontSize: 13 }}>
-              We&apos;ll use: <b>{domain}</b>
+          {cleanDomain ? (
+            <div style={{ marginTop: 8, opacity: 0.85, fontSize: 13 }}>
+              We'll use: <b>{cleanDomain}</b>
             </div>
           ) : null}
 
-          <div style={{ marginTop: 10, opacity: 0.85, fontSize: 13 }}>{hint}</div>
+          <div style={{ marginTop: 12, opacity: 0.85, fontSize: 13 }}>
+            Recommended order: <b>Request DNS records</b> → update DNS at registrar → <b>Verify DNS</b> →{" "}
+            <b>Connect</b>.
+          </div>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
-            <button style={primaryBtn} onClick={requestDns} disabled={!token || !!busy}>
+            <button style={primaryBtn} onClick={requestDomain} disabled={!token}>
               Request DNS records
             </button>
-            <button style={secondaryBtn} onClick={verifyDns} disabled={!token || !!busy}>
+            <button style={secondaryBtn} onClick={verifyDns} disabled={!token}>
               Verify DNS
             </button>
-            <button style={secondaryBtn} onClick={checkStatus} disabled={!token || !!busy}>
+            <button style={secondaryBtn} onClick={checkStatus} disabled={!token}>
               Check status
             </button>
-            <button style={secondaryBtn} onClick={connect} disabled={!token || !!busy}>
-              {connectLabel}
+            <button style={secondaryBtn} onClick={connectDomain} disabled={!token}>
+              Connect
             </button>
           </div>
 
@@ -280,35 +291,57 @@ export default function DomainClient() {
             <div
               style={{
                 ...note,
-                background: isError ? "rgba(185, 28, 28, .20)" : "rgba(0,0,0,0.22)",
-                border: isError ? "1px solid rgba(185, 28, 28, .45)" : "1px solid rgba(255,255,255,0.14)",
+                background: isError ? "rgba(185, 28, 28, .25)" : "rgba(0,0,0,0.22)",
+                border: isError ? "1px solid rgba(185, 28, 28, .5)" : "1px solid rgba(255,255,255,0.14)",
               }}
             >
               {msg}
             </div>
           ) : null}
 
+          {dnsRecords?.length ? (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontWeight: 900, marginBottom: 8 }}>DNS records to add</div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={table}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Type</th>
+                      <th style={th}>Name/Host</th>
+                      <th style={th}>Value/Target</th>
+                      <th style={th}>TTL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dnsRecords.map((r, i) => (
+                      <tr key={i}>
+                        <td style={td}>{r.type}</td>
+                        <td style={td}>{r.name}</td>
+                        <td style={{ ...td, wordBreak: "break-all" }}>{r.value}</td>
+                        <td style={td}>{r.ttl ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ marginTop: 8, opacity: 0.85, fontSize: 13 }}>
+                Tip (GoDaddy): add each record under <b>DNS</b> and keep TTL default unless specified.
+              </div>
+            </div>
+          ) : null}
+
           {details ? (
-            <div style={{ marginTop: 12 }}>
+            <div style={{ marginTop: 14 }}>
               <button
+                type="button"
+                style={secondaryBtn}
                 onClick={() => setShowDetails((v) => !v)}
-                style={{
-                  ...secondaryBtn,
-                  padding: "10px 12px",
-                  fontSize: 13,
-                  borderRadius: 10,
-                }}
               >
                 {showDetails ? "Hide details" : "Show details"}
               </button>
-
               {showDetails ? <pre style={pre}>{JSON.stringify(details, null, 2)}</pre> : null}
             </div>
-          ) : (
-            <div style={{ marginTop: 14, opacity: 0.85, fontSize: 13 }}>
-              Tip: Click <b>Request DNS records</b>, add them in GoDaddy, then click <b>Verify DNS</b>.
-            </div>
-          )}
+          ) : null}
         </div>
       </div>
     </main>
@@ -371,10 +404,11 @@ const note: React.CSSProperties = {
   borderRadius: 12,
   background: "rgba(0,0,0,0.22)",
   border: "1px solid rgba(255,255,255,0.14)",
+  whiteSpace: "pre-wrap",
 };
 
 const pre: React.CSSProperties = {
-  marginTop: 14,
+  marginTop: 12,
   padding: 12,
   borderRadius: 12,
   background: "rgba(0,0,0,0.35)",
@@ -383,6 +417,29 @@ const pre: React.CSSProperties = {
   maxHeight: 420,
   fontSize: 12,
 };
+
+const table: React.CSSProperties = {
+  width: "100%",
+  borderCollapse: "collapse",
+  background: "rgba(0,0,0,0.18)",
+  border: "1px solid rgba(255,255,255,0.14)",
+  borderRadius: 12,
+  overflow: "hidden",
+};
+
+const th: React.CSSProperties = {
+  textAlign: "left",
+  padding: 10,
+  fontWeight: 900,
+  borderBottom: "1px solid rgba(255,255,255,0.14)",
+};
+
+const td: React.CSSProperties = {
+  padding: 10,
+  borderBottom: "1px solid rgba(255,255,255,0.10)",
+  verticalAlign: "top",
+};
+
 
 
 
