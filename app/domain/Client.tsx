@@ -26,7 +26,7 @@ function normalizeInputDomain(raw: string) {
   const d = (raw || "").trim().toLowerCase();
   const noProto = d.replace(/^https?:\/\//, "");
   const noPath = noProto.split("/")[0] || "";
-  return noPath;
+  return noPath.replace(/\.$/, "");
 }
 
 function pickRecords(payload: any): DnsRecord[] | null {
@@ -37,22 +37,35 @@ function pickRecords(payload: any): DnsRecord[] | null {
     payload?.records,
     payload?.config?.records,
     payload?.verification?.records,
+    payload?.verification?.dns,
+    payload?.dns,
+    payload?.json?.dns_records,
   ];
 
   for (const c of candidates) {
     if (Array.isArray(c)) {
-      // Normalize shape
       return c
         .map((r: any) => ({
           type: String(r?.type || "").toUpperCase(),
-          name: String(r?.name || r?.host || ""),
-          value: String(r?.value || r?.data || r?.target || ""),
+          name: String(r?.name || r?.host || r?.hostname || ""),
+          value: String(r?.value || r?.data || r?.target || r?.destination || ""),
           ttl: r?.ttl ?? null,
         }))
         .filter((r: DnsRecord) => r.type && r.name !== undefined && r.value !== undefined);
     }
   }
   return null;
+}
+
+function isAlreadyInUse(payload: any) {
+  const code = String(payload?.details?.error?.code || payload?.code || "");
+  const msg = String(payload?.error || payload?.message || "");
+  return code.includes("domain_already_in_use") || msg.toLowerCase().includes("already in use");
+}
+
+function isSchemaCache(payload: any) {
+  const msg = String(payload?.error || payload?.message || "");
+  return msg.toLowerCase().includes("schema cache");
 }
 
 export default function DomainClient() {
@@ -97,11 +110,12 @@ export default function DomainClient() {
     run();
   }, [router]);
 
+  // IMPORTANT FIX:
+  // Don’t clear dnsRecords/details on every click — that makes it feel like it “crashed”.
   async function call(path: string, body: any) {
     setMsg("");
     setIsError(false);
     setDetails(null);
-    setDnsRecords(null);
 
     const res = await fetch(path, {
       method: "POST",
@@ -129,10 +143,24 @@ export default function DomainClient() {
     setDetails(payload ?? null);
   }
 
-  async function requestDomain() {
-    if (!cleanDomain) return fail("Enter a domain first.");
-    if (!token) return fail("Not signed in.");
+  function requireDomainAndToken() {
+    if (!cleanDomain) {
+      fail("Enter a domain first.");
+      return false;
+    }
+    if (!cleanDomain.includes(".")) {
+      fail("That doesn’t look like a valid domain. Example: customer.com");
+      return false;
+    }
+    if (!token) {
+      fail("Not signed in.");
+      return false;
+    }
+    return true;
+  }
 
+  async function requestDomain() {
+    if (!requireDomainAndToken()) return;
     setBusy("Requesting DNS records…");
 
     const r = await call("/api/domain/request", {
@@ -141,6 +169,12 @@ export default function DomainClient() {
     });
 
     if (!r.ok) {
+      if (isSchemaCache(r.json)) {
+        return fail(
+          "Supabase schema cache hasn’t refreshed yet (you just added columns). Wait 2–5 minutes and try again.",
+          r.json
+        );
+      }
       return fail(r.json?.error || `Request failed (${r.status})`, r.json);
     }
 
@@ -151,14 +185,18 @@ export default function DomainClient() {
   }
 
   async function verifyDns() {
-    if (!cleanDomain) return fail("Enter a domain first.");
-    if (!token) return fail("Not signed in.");
-
+    if (!requireDomainAndToken()) return;
     setBusy("Verifying DNS…");
 
     const r = await call("/api/domain/verify", { domain: cleanDomain });
 
     if (!r.ok) {
+      if (isSchemaCache(r.json)) {
+        return fail(
+          "Supabase schema cache hasn’t refreshed yet (you just added columns). Wait 2–5 minutes and try again.",
+          r.json
+        );
+      }
       return fail(r.json?.error || `Verify failed (${r.status})`, r.json);
     }
 
@@ -169,14 +207,18 @@ export default function DomainClient() {
   }
 
   async function checkStatus() {
-    if (!cleanDomain) return fail("Enter a domain first.");
-    if (!token) return fail("Not signed in.");
-
+    if (!requireDomainAndToken()) return;
     setBusy("Checking status…");
 
     const r = await call("/api/domain/status", { domain: cleanDomain });
 
     if (!r.ok) {
+      if (isSchemaCache(r.json)) {
+        return fail(
+          "Supabase schema cache hasn’t refreshed yet (you just added columns). Wait 2–5 minutes and try again.",
+          r.json
+        );
+      }
       return fail(r.json?.error || `Status failed (${r.status})`, r.json);
     }
 
@@ -190,25 +232,47 @@ export default function DomainClient() {
   }
 
   async function connectDomain() {
-    if (!cleanDomain) return fail("Enter a domain first.");
-    if (!token) return fail("Not signed in.");
+    if (!requireDomainAndToken()) return;
+
+    // Guardrail: if we already see “verified” from prior status/verify calls,
+    // don’t keep trying to “add” the domain again.
+    const alreadyVerified =
+      Boolean(details?.vercel_verified ?? details?.verified ?? false) ||
+      Boolean(details?.status && String(details.status).toLowerCase().includes("verified"));
+
+    if (alreadyVerified) {
+      return ok("Already verified ✅ No further action needed. If your site isn’t loading yet, wait for DNS propagation.");
+    }
 
     setBusy("Connecting…");
 
     const r = await call("/api/domain/connect", { domain: cleanDomain });
 
     if (!r.ok) {
-      const code = String(r.json?.details?.error?.code || "");
-      if (code.includes("domain_already_in_use")) {
+      // BIG FIX: if domain is already attached, treat it as “OK-ish” and tell the user what to do next,
+      // instead of making them think the button is broken.
+      if (isAlreadyInUse(r.json)) {
+        setBusy("");
+        setIsError(false);
+        setDetails(r.json);
+        setMsg(
+          "That domain is already attached (good sign). ✅ Now click Check status. " +
+            "If status stays pending, you still need the exact DNS records from Request DNS records."
+        );
+        return;
+      }
+
+      if (isSchemaCache(r.json)) {
         return fail(
-          "That domain is already attached to one of your projects. Remove it from Vercel → Project → Settings → Domains, then try again.",
+          "Supabase schema cache hasn’t refreshed yet (you just added columns). Wait 2–5 minutes and try again.",
           r.json
         );
       }
+
       return fail(r.json?.error || `Connect failed (${r.status})`, r.json);
     }
 
-    ok("Connected ✅", r.json);
+    ok("Connected ✅ Now click Check status until it shows verified.", r.json);
   }
 
   function resetUi() {
@@ -252,12 +316,7 @@ export default function DomainClient() {
             Domain (example: customer.com)
           </label>
 
-          <input
-            value={domain}
-            onChange={(e) => setDomain(e.target.value)}
-            placeholder="yourdomain.com"
-            style={input}
-          />
+          <input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="yourdomain.com" style={input} />
 
           {cleanDomain ? (
             <div style={{ marginTop: 8, opacity: 0.85, fontSize: 13 }}>
@@ -266,21 +325,20 @@ export default function DomainClient() {
           ) : null}
 
           <div style={{ marginTop: 12, opacity: 0.85, fontSize: 13 }}>
-            Recommended order: <b>Request DNS records</b> → update DNS at registrar → <b>Verify DNS</b> →{" "}
-            <b>Connect</b>.
+            Recommended order: <b>Request DNS records</b> → update DNS at registrar → <b>Verify DNS</b> → <b>Connect</b>.
           </div>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
-            <button style={primaryBtn} onClick={requestDomain} disabled={!token}>
+            <button style={primaryBtn} onClick={requestDomain} disabled={!token || !!busy}>
               Request DNS records
             </button>
-            <button style={secondaryBtn} onClick={verifyDns} disabled={!token}>
+            <button style={secondaryBtn} onClick={verifyDns} disabled={!token || !!busy}>
               Verify DNS
             </button>
-            <button style={secondaryBtn} onClick={checkStatus} disabled={!token}>
+            <button style={secondaryBtn} onClick={checkStatus} disabled={!token || !!busy}>
               Check status
             </button>
-            <button style={secondaryBtn} onClick={connectDomain} disabled={!token}>
+            <button style={secondaryBtn} onClick={connectDomain} disabled={!token || !!busy}>
               Connect
             </button>
           </div>
@@ -332,11 +390,7 @@ export default function DomainClient() {
 
           {details ? (
             <div style={{ marginTop: 14 }}>
-              <button
-                type="button"
-                style={secondaryBtn}
-                onClick={() => setShowDetails((v) => !v)}
-              >
+              <button type="button" style={secondaryBtn} onClick={() => setShowDetails((v) => !v)}>
                 {showDetails ? "Hide details" : "Show details"}
               </button>
               {showDetails ? <pre style={pre}>{JSON.stringify(details, null, 2)}</pre> : null}
@@ -439,6 +493,8 @@ const td: React.CSSProperties = {
   borderBottom: "1px solid rgba(255,255,255,0.10)",
   verticalAlign: "top",
 };
+
+
 
 
 
