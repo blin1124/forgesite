@@ -68,6 +68,11 @@ function isSchemaCache(payload: any) {
   return msg.toLowerCase().includes("schema cache");
 }
 
+function hasAnyDnsRecords(payload: any) {
+  const recs = pickRecords(payload);
+  return Array.isArray(recs) && recs.length > 0;
+}
+
 export default function DomainClient() {
   const router = useRouter();
   const sp = useSearchParams();
@@ -110,8 +115,7 @@ export default function DomainClient() {
     run();
   }, [router]);
 
-  // IMPORTANT FIX:
-  // Don’t clear dnsRecords/details on every click — that makes it feel like it “crashed”.
+  // IMPORTANT: Don’t clear dnsRecords on every click; only replace when we have new ones
   async function call(path: string, body: any) {
     setMsg("");
     setIsError(false);
@@ -161,6 +165,7 @@ export default function DomainClient() {
 
   async function requestDomain() {
     if (!requireDomainAndToken()) return;
+
     setBusy("Requesting DNS records…");
 
     const r = await call("/api/domain/request", {
@@ -179,9 +184,17 @@ export default function DomainClient() {
     }
 
     const recs = pickRecords(r.json);
-    if (recs?.length) setDnsRecords(recs);
 
-    ok("DNS records generated ✅ Add these at your registrar (GoDaddy), then click Verify DNS.", r.json);
+    // ✅ FIX: if server returns NO records, treat as failure (customers need copy/paste DNS)
+    if (recs?.length) {
+      setDnsRecords(recs);
+      return ok("DNS records generated ✅ Add these at your registrar, then click Verify DNS.", r.json);
+    }
+
+    return fail(
+      "Request succeeded but NO DNS records were returned.\n\nThis means /api/domain/request is not returning the DNS records customers must copy into GoDaddy/Namecheap/Ionos.\n\nFix required: update /api/domain/request to return DNS records (A + CNAME and/or verification TXT/CNAME).",
+      r.json
+    );
   }
 
   async function verifyDns() {
@@ -234,14 +247,24 @@ export default function DomainClient() {
   async function connectDomain() {
     if (!requireDomainAndToken()) return;
 
-    // Guardrail: if we already see “verified” from prior status/verify calls,
-    // don’t keep trying to “add” the domain again.
     const alreadyVerified =
       Boolean(details?.vercel_verified ?? details?.verified ?? false) ||
       Boolean(details?.status && String(details.status).toLowerCase().includes("verified"));
 
     if (alreadyVerified) {
-      return ok("Already verified ✅ No further action needed. If your site isn’t loading yet, wait for DNS propagation.");
+      return ok(
+        "Already verified ✅ No further action needed.\nIf your site isn’t loading yet, wait for DNS propagation.",
+        details
+      );
+    }
+
+    // Guardrail: if Request never gave DNS records, Connect will be confusing
+    if (!dnsRecords?.length && details && !hasAnyDnsRecords(details)) {
+      setIsError(true);
+      setMsg(
+        "Connect can fail or be misleading until DNS records are shown.\nClick Request DNS records first — if it returns no DNS records, /api/domain/request must be fixed."
+      );
+      return;
     }
 
     setBusy("Connecting…");
@@ -249,14 +272,12 @@ export default function DomainClient() {
     const r = await call("/api/domain/connect", { domain: cleanDomain });
 
     if (!r.ok) {
-      // BIG FIX: if domain is already attached, treat it as “OK-ish” and tell the user what to do next,
-      // instead of making them think the button is broken.
       if (isAlreadyInUse(r.json)) {
         setBusy("");
         setIsError(false);
         setDetails(r.json);
         setMsg(
-          "That domain is already attached (good sign). ✅ Now click Check status. " +
+          "That domain is already attached (good sign). ✅ Now click Check status.\n" +
             "If status stays pending, you still need the exact DNS records from Request DNS records."
         );
         return;
@@ -325,7 +346,8 @@ export default function DomainClient() {
           ) : null}
 
           <div style={{ marginTop: 12, opacity: 0.85, fontSize: 13 }}>
-            Recommended order: <b>Request DNS records</b> → update DNS at registrar → <b>Verify DNS</b> → <b>Connect</b>.
+            Recommended order: <b>Request DNS records</b> → update DNS at registrar → <b>Verify DNS</b> →{" "}
+            <b>Connect</b>.
           </div>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
@@ -383,7 +405,7 @@ export default function DomainClient() {
                 </table>
               </div>
               <div style={{ marginTop: 8, opacity: 0.85, fontSize: 13 }}>
-                Tip (GoDaddy): add each record under <b>DNS</b> and keep TTL default unless specified.
+                Tip: add each record under <b>DNS</b> at your registrar and keep TTL default unless specified.
               </div>
             </div>
           ) : null}
@@ -402,6 +424,7 @@ export default function DomainClient() {
   );
 }
 
+// --- styles below ---
 const page: React.CSSProperties = {
   minHeight: "100vh",
   padding: 24,
@@ -493,6 +516,9 @@ const td: React.CSSProperties = {
   borderBottom: "1px solid rgba(255,255,255,0.10)",
   verticalAlign: "top",
 };
+
+
+
 
 
 
