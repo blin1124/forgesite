@@ -1,70 +1,119 @@
- import { NextResponse, type NextRequest } from "next/server";
-import { createServerClient } from "@supabase/ssr";
+import { NextRequest, NextResponse } from "next/server";
 
-export const config = {
-  matcher: ["/builder/:path*", "/sites/:path*", "/templates/:path*", "/domain/:path*"],
-};
+const MARKETING_HOSTS = new Set([
+  "forgesite.net",
+  "www.forgesite.net",
+]);
 
-function isActive(status: string | null | undefined) {
-  return status === "active" || status === "trialing";
+function stripPort(host: string) {
+  return host.split(":")[0];
+}
+
+function normalizeHost(host: string) {
+  const h = stripPort(host.trim().toLowerCase());
+  // common: users type/land on www.*
+  return h.startsWith("www.") ? h.slice(4) : h;
+}
+
+function isBypassPath(pathname: string) {
+  return (
+    pathname.startsWith("/api") ||
+    pathname.startsWith("/_next") ||
+    pathname.startsWith("/favicon") ||
+    pathname.startsWith("/robots.txt") ||
+    pathname.startsWith("/sitemap") ||
+    pathname.startsWith("/images") ||
+    pathname.startsWith("/assets") ||
+    pathname.startsWith("/login") ||
+    pathname.startsWith("/builder") ||
+    pathname.startsWith("/settings") ||
+    pathname.startsWith("/domain") // keep your domain UI as-is
+  );
+}
+
+/**
+ * Resolve hostname -> site_id from Supabase (custom_domains).
+ * Requires:
+ * - NEXT_PUBLIC_SUPABASE_URL
+ * - NEXT_PUBLIC_SUPABASE_ANON_KEY
+ *
+ * IMPORTANT:
+ * Your Supabase RLS must allow SELECT on custom_domains for:
+ *   domain = <hostname> AND vercel_verified = true
+ * (or you can relax this to allow SELECT on verified domains only).
+ */
+async function resolveSiteIdByHost(hostname: string) {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !anonKey) return null;
+
+  // Query PostgREST directly (fast + works in middleware)
+  // Table: custom_domains
+  // Columns used: domain, site_id, vercel_verified
+  const url =
+    `${supabaseUrl}/rest/v1/custom_domains` +
+    `?select=site_id` +
+    `&domain=eq.${encodeURIComponent(hostname)}` +
+    `&vercel_verified=eq.true` +
+    `&limit=1`;
+
+  const res = await fetch(url, {
+    headers: {
+      apikey: anonKey,
+      Authorization: `Bearer ${anonKey}`,
+    },
+    // avoid caching host->site mapping during changes
+    cache: "no-store",
+  });
+
+  if (!res.ok) return null;
+
+  const json = (await res.json().catch(() => null)) as null | Array<{ site_id: string }>;
+  const siteId = json?.[0]?.site_id || null;
+  return siteId;
 }
 
 export async function middleware(req: NextRequest) {
-  const res = NextResponse.next();
-  const { pathname, search } = req.nextUrl;
+  const pathname = req.nextUrl.pathname;
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return req.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            res.cookies.set(name, value, options);
-          });
-        },
-      },
-    }
-  );
+  // Let Next handle static/API/auth pages normally
+  if (isBypassPath(pathname)) return NextResponse.next();
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const hostHeader = req.headers.get("host") || "";
+  if (!hostHeader) return NextResponse.next();
 
-  const nextParam = encodeURIComponent(pathname + (search || ""));
+  const rawHost = stripPort(hostHeader);
+  const hostNoWww = normalizeHost(rawHost);
 
-  // 🔴 ONLY redirect to login if NOT authenticated
-  if (!user) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/login";
-    url.search = `?next=${nextParam}`;
-    return NextResponse.redirect(url);
+  // Keep marketing site intact on your main domain(s)
+  if (MARKETING_HOSTS.has(rawHost) || MARKETING_HOSTS.has(hostNoWww)) {
+    return NextResponse.next();
   }
 
-  // 🟢 USER IS AUTHENTICATED — allow /builder to load FIRST
-  if (pathname.startsWith("/builder")) {
-    return res;
+  // If running on vercel.app preview domains, do NOT rewrite
+  if (hostNoWww.endsWith(".vercel.app")) {
+    return NextResponse.next();
   }
 
-  // 🔴 Check entitlement only AFTER auth
-  const { data: ent, error } = await supabase
-    .from("entitlements")
-    .select("status")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (error || !ent || !isActive(ent.status)) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/billing";
-    url.search = `?next=${nextParam}`;
-    return NextResponse.redirect(url);
+  // Resolve custom domain -> siteId
+  const siteId = await resolveSiteIdByHost(hostNoWww);
+  if (!siteId) {
+    // If no mapping, show marketing (or you could show a 404 page)
+    return NextResponse.next();
   }
 
-  return res;
+  // Rewrite: /anything -> /s/<siteId>/anything
+  const rewriteUrl = req.nextUrl.clone();
+  rewriteUrl.pathname = `/s/${siteId}${pathname === "/" ? "" : pathname}`;
+
+  return NextResponse.rewrite(rewriteUrl);
 }
+
+// Run middleware on all routes except Next internals (we also hard-check in code)
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+};
 
 
 
