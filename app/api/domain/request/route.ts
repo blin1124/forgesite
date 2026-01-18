@@ -1,10 +1,5 @@
- import { NextResponse } from "next/server";
-import {
-  supabaseAdmin,
-  getUserIdFromAuthHeader,
-  normalizeDomain,
-  upsertCustomDomain,
-} from "../_lib";
+import { NextResponse } from "next/server";
+import { supabaseAdmin, getUserIdFromAuthHeader, normalizeDomain, upsertCustomDomain } from "../_lib";
 
 export const runtime = "nodejs";
 
@@ -16,7 +11,8 @@ type DnsRecord = {
 };
 
 function defaultDnsRecords(): DnsRecord[] {
-  // Safe defaults that work for GoDaddy / Namecheap / IONOS
+  // Works for GoDaddy / Namecheap / IONOS as a baseline.
+  // Apex/root (@) uses A record. "www" uses CNAME.
   return [
     { type: "A", name: "@", value: "76.76.21.21", ttl: 600 },
     { type: "CNAME", name: "www", value: "cname.vercel-dns.com", ttl: 600 },
@@ -31,8 +27,10 @@ function defaultDnsRecords(): DnsRecord[] {
  */
 export async function POST(req: Request) {
   try {
+    // Auth (expects Authorization: Bearer <supabase access token>)
     const user_id = await getUserIdFromAuthHeader(supabaseAdmin, req);
 
+    // Input
     const body = await req.json().catch(() => ({}));
     const domainRaw = String(body?.domain || "");
     const site_id = body?.site_id ? String(body.site_id) : null;
@@ -42,8 +40,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid domain" }, { status: 400 });
     }
 
+    // Always return copy/paste DNS instructions
     const dns_records = defaultDnsRecords();
 
+    // Store for UI + audit trail (does NOT affect Vercel)
     const row = await upsertCustomDomain({
       admin: supabaseAdmin,
       user_id,
@@ -62,12 +62,16 @@ export async function POST(req: Request) {
       status: row?.status || "dns_required",
       vercel_verified: row?.vercel_verified ?? false,
       dns_records: row?.dns_records ?? dns_records,
-      note: "These are the DNS records customers should add at their registrar. Click Verify/Connect after DNS is updated.",
+      note:
+        "Add these DNS records at your registrar (GoDaddy/Namecheap/IONOS). After they propagate, click Verify DNS, then Connect.",
     });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || "Request failed" }, { status: 500 });
   }
 }
+
+
+
 
 
 
