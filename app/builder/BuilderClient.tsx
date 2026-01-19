@@ -10,6 +10,9 @@ type SiteRow = {
   prompt: string | null;
   html: string | null;
   created_at: string;
+
+  // ✅ Added: lets us display publish status if your /api/sites/list returns it
+  content?: string | null; // e.g. "generated", "published"
 };
 
 type ChatMsg = { role: "user" | "assistant"; content: string };
@@ -49,6 +52,9 @@ export default function BuilderClient() {
   const [busy, setBusy] = useState<string>("");
   const [debug, setDebug] = useState<string>("");
 
+  // ✅ Added: disable publish while running
+  const [publishBusyId, setPublishBusyId] = useState<string>("");
+
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
   const canUseAI = useMemo(() => apiKey.trim().startsWith("sk-"), [apiKey]);
@@ -72,7 +78,10 @@ export default function BuilderClient() {
       const res = await fetch("/api/sites/list");
       const { text, json } = await readResponse(res);
       if (!res.ok) throw new Error(json?.error || `List failed (${res.status}): ${text.slice(0, 200)}`);
-      setSites(Array.isArray(json?.sites) ? json.sites : []);
+
+      // keep exactly your behavior, just allow "content" if returned
+      const arr = Array.isArray(json?.sites) ? json.sites : [];
+      setSites(arr as SiteRow[]);
     } catch (e: any) {
       setDebug(e?.message || "Failed to list sites");
     }
@@ -160,6 +169,44 @@ export default function BuilderClient() {
     }
   }
 
+  // ✅ NEW: Publish button logic
+  async function publishSite(siteId: string) {
+    if (!siteId) return;
+
+    setBusy("");
+    setDebug("");
+    setPublishBusyId(siteId);
+
+    try {
+      // optional but helpful: make sure latest HTML is saved first
+      // (You can remove this if you don’t want auto-save.)
+      if (siteId === selectedId) {
+        if (!prompt.trim()) throw new Error("Prompt is empty. Save first.");
+        if (!html.trim()) throw new Error("HTML is empty. Generate + Save first.");
+      }
+
+      setBusy("Publishing…");
+
+      const res = await fetch(`/api/sites/${encodeURIComponent(siteId)}/publish`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      });
+
+      const { text, json } = await readResponse(res);
+      if (!res.ok) throw new Error(json?.error || `Publish failed (${res.status}): ${text.slice(0, 240)}`);
+
+      await refreshSites();
+
+      setBusy("Published ✅");
+      setTimeout(() => setBusy(""), 1200);
+    } catch (e: any) {
+      setBusy(e?.message || "Publish failed");
+      setDebug(String(e?.stack || ""));
+    } finally {
+      setPublishBusyId("");
+    }
+  }
+
   // ✅ supports BOTH response formats:
   // - { file_url, file_mime, file_name }
   // - { url, mime, name }
@@ -205,6 +252,38 @@ export default function BuilderClient() {
     }
   }
 
+  async function runChat() {
+    setBusy("");
+    setDebug("");
+
+    if (!canUseAI) return setBusy("Paste your OpenAI key first.");
+    if (!chatInput.trim() && !fileUrl) return setBusy("Type a message or upload a file.");
+
+    const userMsg: ChatMsg = { role: "user", content: chatInput.trim() || "(file attached)" };
+    const nextHistory = [...history, userMsg];
+
+    setHistory(nextHistory);
+    setChatInput("");
+
+    try {
+      setBusy("Thinking…");
+
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          apiKey,
+          message: userMsg.content,
+          currentPrompt: prompt,
+          history: nextHistory,
+          file_url: fileUrl || null,
+          file_mime: fileMime || null,
+          file_name: fileName || null,
+        }),
+      });
+
+      const { text, json } = await readResponse(res);
+      if (!res.ok) throw new
   async function runChat() {
     setBusy("");
     setDebug("");
@@ -363,6 +442,16 @@ export default function BuilderClient() {
               <button style={primaryBtn} onClick={() => generateHtml()}>Generate HTML</button>
               <button style={secondaryBtn} onClick={saveSite}>Save</button>
 
+              {/* NOTE: Publish button is only meaningful after you have a selected site id */}
+              <button
+                style={publishBtn}
+                onClick={() => (selectedId ? publishSite(selectedId) : setBusy("Select or Save a site first, then Publish."))}
+                disabled={!selectedId || publishBusyId === selectedId}
+                title="Publishes this site so the connected domain can show it"
+              >
+                {publishBusyId === selectedId ? "Publishing…" : "Publish"}
+              </button>
+
               <label style={uploadBtn}>
                 Upload PDF/PNG/DOCX/XLSX
                 <input
@@ -391,7 +480,15 @@ export default function BuilderClient() {
             ) : null}
 
             {debug ? (
-              <div style={{ marginTop: 10, padding: 10, borderRadius: 12, background: "rgba(185, 28, 28, .25)", border: "1px solid rgba(185, 28, 28, .5)" }}>
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: 10,
+                  borderRadius: 12,
+                  background: "rgba(185, 28, 28, .25)",
+                  border: "1px solid rgba(185, 28, 28, .5)",
+                }}
+              >
                 <div style={{ fontWeight: 900 }}>Debug</div>
                 <div style={{ whiteSpace: "pre-wrap", fontSize: 12, opacity: 0.95 }}>{debug}</div>
               </div>
@@ -425,7 +522,6 @@ export default function BuilderClient() {
               />
               <button style={primaryBtn} onClick={runChat}>Send</button>
 
-              {/* ✅ NEW: Connect Domain button near chat */}
               <button style={secondaryBtn} onClick={() => router.push("/domain")}>
                 Connect Domain
               </button>
@@ -511,6 +607,16 @@ const secondaryBtn: React.CSSProperties = {
   cursor: "pointer",
 };
 
+const publishBtn: React.CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(34,197,94,0.92)",
+  color: "rgba(0,0,0,0.85)",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
 const uploadBtn: React.CSSProperties = {
   ...secondaryBtn,
   display: "inline-flex",
@@ -547,6 +653,7 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
 
 
 
