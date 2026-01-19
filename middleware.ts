@@ -1,127 +1,103 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const MARKETING_HOSTS = new Set([
-  "forgesite.net",
-  "www.forgesite.net",
-]);
+export const config = {
+  matcher: [
+    // Run on everything except Next internals/static files
+    "/((?!_next|.*\\..*).*)",
+  ],
+};
+
+// Hosts that should NOT be treated as customer domains
+function isAppHost(host: string) {
+  const h = host.toLowerCase();
+  return (
+    h === "forgesite.net" ||
+    h === "www.forgesite.net" ||
+    h.endsWith(".vercel.app") ||
+    h.includes("localhost")
+  );
+}
 
 function stripPort(host: string) {
   return host.split(":")[0];
 }
 
 function normalizeHost(host: string) {
-  const h = stripPort(host.trim().toLowerCase());
-  // common: users type/land on www.*
+  const h = stripPort(host).toLowerCase();
   return h.startsWith("www.") ? h.slice(4) : h;
 }
 
 function isBypassPath(pathname: string) {
+  // Don’t rewrite these routes
   return (
     pathname.startsWith("/api") ||
-    pathname.startsWith("/_next") ||
-    pathname.startsWith("/favicon") ||
-    pathname.startsWith("/robots.txt") ||
-    pathname.startsWith("/sitemap") ||
-    pathname.startsWith("/images") ||
-    pathname.startsWith("/assets") ||
     pathname.startsWith("/login") ||
+    pathname.startsWith("/signup") ||
+    pathname.startsWith("/billing") ||
     pathname.startsWith("/builder") ||
+    pathname.startsWith("/domain") ||
+    pathname.startsWith("/account") ||
     pathname.startsWith("/settings") ||
-    pathname.startsWith("/domain") // keep your domain UI as-is
+    pathname.startsWith("/_hosted") ||
+    pathname.startsWith("/privacy")
   );
 }
 
-/**
- * Resolve hostname -> site_id from Supabase (custom_domains).
- * Requires:
- * - NEXT_PUBLIC_SUPABASE_URL
- * - NEXT_PUBLIC_SUPABASE_ANON_KEY
- *
- * IMPORTANT:
- * Your Supabase RLS must allow SELECT on custom_domains for:
- *   domain = <hostname> AND vercel_verified = true
- * (or you can relax this to allow SELECT on verified domains only).
- */
-async function resolveSiteIdByHost(hostname: string) {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!supabaseUrl || !anonKey) return null;
-
-  // Query PostgREST directly (fast + works in middleware)
-  // Table: custom_domains
-  // Columns used: domain, site_id, vercel_verified
-  const url =
-    `${supabaseUrl}/rest/v1/custom_domains` +
-    `?select=site_id` +
-    `&domain=eq.${encodeURIComponent(hostname)}` +
-    `&vercel_verified=eq.true` +
-    `&limit=1`;
-
-  const res = await fetch(url, {
-    headers: {
-      apikey: anonKey,
-      Authorization: `Bearer ${anonKey}`,
-    },
-    // avoid caching host->site mapping during changes
-    cache: "no-store",
-  });
-
-  if (!res.ok) return null;
-
-  const json = (await res.json().catch(() => null)) as null | Array<{ site_id: string }>;
-  const siteId = json?.[0]?.site_id || null;
-  return siteId;
-}
-
 export async function middleware(req: NextRequest) {
-  const pathname = req.nextUrl.pathname;
+  const url = req.nextUrl;
+  const pathname = url.pathname;
 
-  // Let Next handle static/API/auth pages normally
+  // Skip paths we never want to rewrite
   if (isBypassPath(pathname)) return NextResponse.next();
 
   const hostHeader = req.headers.get("host") || "";
-  if (!hostHeader) return NextResponse.next();
+  const host = normalizeHost(hostHeader);
 
-  const rawHost = stripPort(hostHeader);
-  const hostNoWww = normalizeHost(rawHost);
+  // App host? Let it work normally
+  if (!host || isAppHost(host)) return NextResponse.next();
 
-  // Keep marketing site intact on your main domain(s)
-  if (MARKETING_HOSTS.has(rawHost) || MARKETING_HOSTS.has(hostNoWww)) {
+  // Already on /s/... path? Also let it through (prevents loops)
+  if (pathname.startsWith("/s/")) return NextResponse.next();
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  // If these env vars are missing, don’t break the whole app
+  if (!supabaseUrl || !supabaseAnon) return NextResponse.next();
+
+  // Lookup: custom_domains.domain == host
+  // IMPORTANT: your custom_domains table must allow SELECT for this query (RLS)
+  const lookupUrl =
+    `${supabaseUrl}/rest/v1/custom_domains` +
+    `?select=site_id,status,domain` +
+    `&domain=eq.${encodeURIComponent(host)}` +
+    `&limit=1`;
+
+  try {
+    const r = await fetch(lookupUrl, {
+      headers: {
+        apikey: supabaseAnon,
+        Authorization: `Bearer ${supabaseAnon}`,
+      },
+      // avoid cache issues on edge
+      cache: "no-store",
+    });
+
+    if (!r.ok) return NextResponse.next();
+
+    const rows = (await r.json()) as Array<{ site_id: string; status?: string; domain?: string }>;
+    const row = rows?.[0];
+
+    if (!row?.site_id) return NextResponse.next();
+
+    // Optional: if you want to only route when active/verified:
+    // if (row.status && !["verified", "pending", "dns_required"].includes(row.status)) return NextResponse.next();
+
+    // Rewrite customer domain -> /s/{site_id}{pathname}
+    const rewriteUrl = req.nextUrl.clone();
+    rewriteUrl.pathname = `/s/${row.site_id}${pathname}`;
+    return NextResponse.rewrite(rewriteUrl);
+  } catch {
     return NextResponse.next();
   }
-
-  // If running on vercel.app preview domains, do NOT rewrite
-  if (hostNoWww.endsWith(".vercel.app")) {
-    return NextResponse.next();
-  }
-
-  // Resolve custom domain -> siteId
-  const siteId = await resolveSiteIdByHost(hostNoWww);
-  if (!siteId) {
-    // If no mapping, show marketing (or you could show a 404 page)
-    return NextResponse.next();
-  }
-
-  // Rewrite: /anything -> /s/<siteId>/anything
-  const rewriteUrl = req.nextUrl.clone();
-  rewriteUrl.pathname = `/s/${siteId}${pathname === "/" ? "" : pathname}`;
-
-  return NextResponse.rewrite(rewriteUrl);
 }
-
-// Run middleware on all routes except Next internals (we also hard-check in code)
-export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
-};
-
-
-
-
-
-
-
-
-
-
-
