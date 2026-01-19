@@ -9,10 +9,8 @@ type SiteRow = {
   template: string | null;
   prompt: string | null;
   html: string | null;
+  content?: string | null; // optional (some rows have it)
   created_at: string;
-
-  // ✅ Added: lets us display publish status if your /api/sites/list returns it
-  content?: string | null; // e.g. "generated", "published"
 };
 
 type ChatMsg = { role: "user" | "assistant"; content: string };
@@ -33,7 +31,7 @@ export default function BuilderClient() {
 
   const [email, setEmail] = useState<string>("");
 
-  // ✅ start BLANK every time (no localStorage)
+  // starts blank every time (no localStorage)
   const [apiKey, setApiKey] = useState<string>("");
   const [prompt, setPrompt] = useState<string>("");
 
@@ -52,8 +50,7 @@ export default function BuilderClient() {
   const [busy, setBusy] = useState<string>("");
   const [debug, setDebug] = useState<string>("");
 
-  // ✅ Added: disable publish while running
-  const [publishBusyId, setPublishBusyId] = useState<string>("");
+  const [publishingId, setPublishingId] = useState<string>("");
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
@@ -71,6 +68,7 @@ export default function BuilderClient() {
       await refreshSites();
     };
     run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function refreshSites() {
@@ -78,10 +76,7 @@ export default function BuilderClient() {
       const res = await fetch("/api/sites/list");
       const { text, json } = await readResponse(res);
       if (!res.ok) throw new Error(json?.error || `List failed (${res.status}): ${text.slice(0, 200)}`);
-
-      // keep exactly your behavior, just allow "content" if returned
-      const arr = Array.isArray(json?.sites) ? json.sites : [];
-      setSites(arr as SiteRow[]);
+      setSites(Array.isArray(json?.sites) ? json.sites : []);
     } catch (e: any) {
       setDebug(e?.message || "Failed to list sites");
     }
@@ -100,7 +95,7 @@ export default function BuilderClient() {
     setDebug("");
   }
 
-  // ✅ accepts promptOverride to avoid stale state
+  // accepts promptOverride to avoid stale state
   async function generateHtml(promptOverride?: string) {
     setBusy("");
     setDebug("");
@@ -169,45 +164,7 @@ export default function BuilderClient() {
     }
   }
 
-  // ✅ NEW: Publish button logic
-  async function publishSite(siteId: string) {
-    if (!siteId) return;
-
-    setBusy("");
-    setDebug("");
-    setPublishBusyId(siteId);
-
-    try {
-      // optional but helpful: make sure latest HTML is saved first
-      // (You can remove this if you don’t want auto-save.)
-      if (siteId === selectedId) {
-        if (!prompt.trim()) throw new Error("Prompt is empty. Save first.");
-        if (!html.trim()) throw new Error("HTML is empty. Generate + Save first.");
-      }
-
-      setBusy("Publishing…");
-
-      const res = await fetch(`/api/sites/${encodeURIComponent(siteId)}/publish`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-      });
-
-      const { text, json } = await readResponse(res);
-      if (!res.ok) throw new Error(json?.error || `Publish failed (${res.status}): ${text.slice(0, 240)}`);
-
-      await refreshSites();
-
-      setBusy("Published ✅");
-      setTimeout(() => setBusy(""), 1200);
-    } catch (e: any) {
-      setBusy(e?.message || "Publish failed");
-      setDebug(String(e?.stack || ""));
-    } finally {
-      setPublishBusyId("");
-    }
-  }
-
-  // ✅ supports BOTH response formats:
+  // supports BOTH response formats:
   // - { file_url, file_mime, file_name }
   // - { url, mime, name }
   async function uploadFile(file: File) {
@@ -237,11 +194,11 @@ export default function BuilderClient() {
 
       // add attachment info into prompt
       const block = `\n\nATTACHMENT:\nNAME: ${n}\nMIME: ${m}\nURL: ${u}\n`;
-      const nextPrompt = prompt.includes(u) ? prompt : (prompt + block);
+      const nextPrompt = prompt.includes(u) ? prompt : prompt + block;
 
       setPrompt(nextPrompt);
 
-      // ✅ regenerate using the NEW prompt
+      // regenerate using the NEW prompt
       setTimeout(() => generateHtml(nextPrompt), 50);
 
       setBusy("Uploaded ✅ (and regenerating)");
@@ -283,38 +240,6 @@ export default function BuilderClient() {
       });
 
       const { text, json } = await readResponse(res);
-      if (!res.ok) throw new
-  async function runChat() {
-    setBusy("");
-    setDebug("");
-
-    if (!canUseAI) return setBusy("Paste your OpenAI key first.");
-    if (!chatInput.trim() && !fileUrl) return setBusy("Type a message or upload a file.");
-
-    const userMsg: ChatMsg = { role: "user", content: chatInput.trim() || "(file attached)" };
-    const nextHistory = [...history, userMsg];
-
-    setHistory(nextHistory);
-    setChatInput("");
-
-    try {
-      setBusy("Thinking…");
-
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          apiKey,
-          message: userMsg.content,
-          currentPrompt: prompt,
-          history: nextHistory,
-          file_url: fileUrl || null,
-          file_mime: fileMime || null,
-          file_name: fileName || null,
-        }),
-      });
-
-      const { text, json } = await readResponse(res);
       if (!res.ok) throw new Error(json?.error || `Chat failed (${res.status}): ${text.slice(0, 240)}`);
 
       const reply = String(json?.reply || "OK");
@@ -324,7 +249,7 @@ export default function BuilderClient() {
 
       setPrompt(prompt_update);
 
-      // ✅ regenerate immediately with the NEW prompt_update
+      // regenerate immediately with the NEW prompt_update
       setTimeout(() => generateHtml(prompt_update), 50);
 
       setBusy("");
@@ -334,12 +259,54 @@ export default function BuilderClient() {
     }
   }
 
+  // ✅ PUBLISH (calls your route: /app/api/sites/[siteId]/publish/route.ts)
+  async function publishSite(siteId: string) {
+    setBusy("");
+    setDebug("");
+    setPublishingId(siteId);
+
+    try {
+      const supabase = createSupabaseBrowserClient();
+      const { data: sessionRes } = await supabase.auth.getSession();
+      const token = sessionRes?.session?.access_token;
+
+      if (!token) {
+        router.replace("/login?next=/builder");
+        return;
+      }
+
+      const res = await fetch(`/api/sites/${encodeURIComponent(siteId)}/publish`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+      });
+
+      const { text, json } = await readResponse(res);
+
+      if (!res.ok) {
+        throw new Error(json?.error || `Publish failed (${res.status}): ${text.slice(0, 240)}`);
+      }
+
+      await refreshSites();
+      setBusy("Published ✅");
+      setTimeout(() => setBusy(""), 1200);
+    } catch (e: any) {
+      setBusy(e?.message || "Publish failed");
+      setDebug(String(e?.stack || ""));
+    } finally {
+      setPublishingId("");
+    }
+  }
+
   async function logout() {
     const supabase = createSupabaseBrowserClient();
     await supabase.auth.signOut();
     router.push("/login?next=%2Fbuilder");
   }
 
+  // ✅ JSX is EVERYTHING inside this return (this is the “JSX” you were asking about)
   return (
     <main
       style={{
@@ -361,10 +328,18 @@ export default function BuilderClient() {
         </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button style={topBtn} onClick={() => router.push("/sites")}>My Sites</button>
-          <button style={topBtn} onClick={() => router.push("/templates")}>Templates</button>
-          <button style={topBtn} onClick={() => router.push("/billing")}>Billing</button>
-          <button style={topBtn} onClick={logout}>Log out</button>
+          <button style={topBtn} onClick={() => router.push("/sites")}>
+            My Sites
+          </button>
+          <button style={topBtn} onClick={() => router.push("/templates")}>
+            Templates
+          </button>
+          <button style={topBtn} onClick={() => router.push("/billing")}>
+            Billing
+          </button>
+          <button style={topBtn} onClick={logout}>
+            Log out
+          </button>
         </div>
       </header>
 
@@ -397,21 +372,39 @@ export default function BuilderClient() {
             </div>
 
             <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-              {sites.map((s) => (
-                <button
-                  key={s.id}
-                  onClick={() => loadSite(s.id)}
-                  style={{
-                    ...siteBtn,
-                    borderColor: selectedId === s.id ? "rgba(255,255,255,0.65)" : "rgba(255,255,255,0.18)",
-                  }}
-                >
-                  <div style={{ fontWeight: 900 }}>{(s.template || "html") + " • " + s.id.slice(0, 7)}</div>
-                  <div style={{ opacity: 0.85, fontSize: 12 }}>
-                    {new Date(s.created_at).toLocaleString()}
+              {sites.map((s) => {
+                const isBusy = publishingId === s.id;
+
+                return (
+                  <div key={s.id} style={{ display: "grid", gap: 8 }}>
+                    <button
+                      onClick={() => loadSite(s.id)}
+                      style={{
+                        ...siteBtn,
+                        borderColor: selectedId === s.id ? "rgba(255,255,255,0.65)" : "rgba(255,255,255,0.18)",
+                      }}
+                    >
+                      <div style={{ fontWeight: 900 }}>{(s.template || "html") + " • " + s.id.slice(0, 7)}</div>
+                      <div style={{ opacity: 0.85, fontSize: 12 }}>{new Date(s.created_at).toLocaleString()}</div>
+                    </button>
+
+                    {/* ✅ THIS is where the Publish button goes */}
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <button style={primaryBtn} onClick={() => publishSite(s.id)} disabled={isBusy}>
+                        {isBusy ? "Publishing…" : "Publish"}
+                      </button>
+
+                      <button style={secondaryBtn} onClick={() => router.push(`/domain?siteId=${encodeURIComponent(s.id)}`)} disabled={isBusy}>
+                        Domain
+                      </button>
+
+                      <button style={secondaryBtn} onClick={() => window.open(`/s/${s.id}`, "_blank")} disabled={isBusy}>
+                        View
+                      </button>
+                    </div>
                   </div>
-                </button>
-              ))}
+                );
+              })}
             </div>
           </section>
 
@@ -420,36 +413,19 @@ export default function BuilderClient() {
             <div style={{ opacity: 0.85, fontSize: 13, marginTop: 6 }}>
               This field starts blank. Customers must paste their own key before generating.
             </div>
-            <input
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-..."
-              type="password"
-              style={{ ...input, marginTop: 10 }}
-            />
+            <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-..." type="password" style={{ ...input, marginTop: 10 }} />
           </section>
 
           <section style={card}>
             <div style={{ fontSize: 18, fontWeight: 900 }}>Website Prompt</div>
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Describe the site you want..."
-              style={{ ...textarea, marginTop: 10 }}
-            />
+            <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Describe the site you want..." style={{ ...textarea, marginTop: 10 }} />
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
-              <button style={primaryBtn} onClick={() => generateHtml()}>Generate HTML</button>
-              <button style={secondaryBtn} onClick={saveSite}>Save</button>
-
-              {/* NOTE: Publish button is only meaningful after you have a selected site id */}
-              <button
-                style={publishBtn}
-                onClick={() => (selectedId ? publishSite(selectedId) : setBusy("Select or Save a site first, then Publish."))}
-                disabled={!selectedId || publishBusyId === selectedId}
-                title="Publishes this site so the connected domain can show it"
-              >
-                {publishBusyId === selectedId ? "Publishing…" : "Publish"}
+              <button style={primaryBtn} onClick={() => generateHtml()}>
+                Generate HTML
+              </button>
+              <button style={secondaryBtn} onClick={saveSite}>
+                Save
               </button>
 
               <label style={uploadBtn}>
@@ -468,15 +444,17 @@ export default function BuilderClient() {
 
             {(fileUrl || fileName) ? (
               <div style={{ marginTop: 10, fontSize: 13, opacity: 0.95 }}>
-                <div><b>Last upload:</b> {fileName || "(no name)"} ({fileMime || "unknown"})</div>
-                <div style={{ wordBreak: "break-all" }}><b>URL:</b> {fileUrl || "(none)"}</div>
+                <div>
+                  <b>Last upload:</b> {fileName || "(no name)"} ({fileMime || "unknown"})
+                </div>
+                <div style={{ wordBreak: "break-all" }}>
+                  <b>URL:</b> {fileUrl || "(none)"}
+                </div>
               </div>
             ) : null}
 
             {busy ? (
-              <div style={{ marginTop: 10, padding: 10, borderRadius: 12, background: "rgba(0,0,0,0.25)" }}>
-                {busy}
-              </div>
+              <div style={{ marginTop: 10, padding: 10, borderRadius: 12, background: "rgba(0,0,0,0.25)" }}>{busy}</div>
             ) : null}
 
             {debug ? (
@@ -500,9 +478,7 @@ export default function BuilderClient() {
 
             <div style={chatBox}>
               {history.length === 0 ? (
-                <div style={{ opacity: 0.8, fontSize: 13 }}>
-                  Ask the AI to adjust the prompt. Uploads are included automatically.
-                </div>
+                <div style={{ opacity: 0.8, fontSize: 13 }}>Ask the AI to adjust the prompt. Uploads are included automatically.</div>
               ) : null}
 
               {history.map((m, idx) => (
@@ -520,7 +496,9 @@ export default function BuilderClient() {
                 placeholder="Tell the AI what to change…"
                 style={{ ...input, flex: 1, minWidth: 220 }}
               />
-              <button style={primaryBtn} onClick={runChat}>Send</button>
+              <button style={primaryBtn} onClick={runChat}>
+                Send
+              </button>
 
               <button style={secondaryBtn} onClick={() => router.push("/domain")}>
                 Connect Domain
@@ -547,6 +525,8 @@ export default function BuilderClient() {
     </main>
   );
 }
+
+// ---- styles ----
 
 const card: React.CSSProperties = {
   background: "rgba(255,255,255,0.12)",
@@ -607,16 +587,6 @@ const secondaryBtn: React.CSSProperties = {
   cursor: "pointer",
 };
 
-const publishBtn: React.CSSProperties = {
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.18)",
-  background: "rgba(34,197,94,0.92)",
-  color: "rgba(0,0,0,0.85)",
-  fontWeight: 900,
-  cursor: "pointer",
-};
-
 const uploadBtn: React.CSSProperties = {
   ...secondaryBtn,
   display: "inline-flex",
@@ -653,6 +623,7 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
 
 
 
