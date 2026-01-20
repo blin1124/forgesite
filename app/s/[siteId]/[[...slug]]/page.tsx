@@ -1,27 +1,17 @@
 import { notFound } from "next/navigation";
 
 type PageProps = {
-  params: {
-    siteId: string;
-    slug?: string[];
-  };
+  params: { siteId: string; slug?: string[] };
 };
 
-function normalizePath(slug?: string[]) {
-  if (!slug || slug.length === 0) return "/";
-  return "/" + slug.join("/");
-}
-
-async function fetchPublishedPage(siteId: string, path: string) {
+async function fetchPublishedHtml(siteId: string) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!url || !key) return null;
 
   const res = await fetch(
-    `${url}/rest/v1/site_pages?select=html&site_id=eq.${siteId}&path=eq.${encodeURIComponent(
-      path
-    )}&limit=1`,
+    `${url}/rest/v1/sites?select=published_html,content&id=eq.${encodeURIComponent(siteId)}&limit=1`,
     {
       headers: {
         apikey: key,
@@ -34,30 +24,34 @@ async function fetchPublishedPage(siteId: string, path: string) {
   if (!res.ok) return null;
 
   const json = await res.json();
-  return json?.[0]?.html || null;
+  const row = json?.[0];
+  if (!row) return null;
+
+  // only render if published
+  if (String(row.content || "").toLowerCase() !== "published") return null;
+
+  return row.published_html || null;
 }
 
 export default async function SitePage({ params }: PageProps) {
   const siteId = params.siteId;
-  const path = normalizePath(params.slug);
 
-  const html = await fetchPublishedPage(siteId, path);
+  const html = await fetchPublishedHtml(siteId);
 
   if (!html) {
     return (
       <main style={{ padding: 40, fontFamily: "system-ui" }}>
         <h1>Site not published yet</h1>
-        <p>
-          Domain is connected but no published content exists for:
-        </p>
-        <pre>
-siteId: {siteId}
-path: {path}
-        </pre>
+        <p>Click Publish in the Builder to push your draft live.</p>
+        <pre>siteId: {siteId}</pre>
       </main>
     );
   }
 
   return <div dangerouslySetInnerHTML={{ __html: html }} />;
 }
+
+
+
+
 
