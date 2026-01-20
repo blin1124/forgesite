@@ -1,51 +1,54 @@
-import { NextResponse } from "next/server";
-import { supabaseAdmin, getUserIdFromAuthHeader, jsonOk, jsonErr } from "@/app/api/domain/lib";
+import { notFound } from "next/navigation";
 
-export const runtime = "nodejs";
+type PageProps = {
+  params: { siteId: string; slug?: string[] };
+};
 
-export async function POST(req: Request, { params }: { params: { siteId: string } }) {
-  try {
-    const user_id = await getUserIdFromAuthHeader(supabaseAdmin, req);
+async function fetchPublishedHtml(siteId: string) {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-    const siteId = String(params?.siteId || "").trim();
-    if (!siteId) return jsonErr("Missing siteId", 400);
+  if (!url || !key) return null;
 
-    // 1) Ensure the site belongs to the logged-in user and grab draft html
-    const { data: site, error: siteErr } = await supabaseAdmin
-      .from("sites")
-      .select("id, user_id, html")
-      .eq("id", siteId)
-      .maybeSingle();
+  const res = await fetch(
+    `${url}/rest/v1/sites?select=published_html,content&id=eq.${encodeURIComponent(siteId)}&limit=1`,
+    {
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+      },
+      cache: "no-store",
+    }
+  );
 
-    if (siteErr) return jsonErr(siteErr.message, 400);
-    if (!site) return jsonErr("Site not found", 404);
-    if (site.user_id !== user_id) return jsonErr("Not authorized for this site", 403);
+  if (!res.ok) return null;
 
-    const draftHtml = String(site.html || "").trim();
-    if (!draftHtml) return jsonErr("Draft HTML is empty. Generate/Save first.", 400);
+  const json = await res.json();
+  const row = json?.[0];
+  if (!row) return null;
 
-    // 2) Copy draft -> published_html and mark published
-    const { data: updated, error: upErr } = await supabaseAdmin
-      .from("sites")
-      .update({
-        content: "published",
-        published_html: draftHtml,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", siteId)
-      .select("id, content")
-      .maybeSingle();
+  // only render if published
+  if (String(row.content || "").toLowerCase() !== "published") return null;
 
-    if (upErr) return jsonErr(upErr.message, 400);
+  return row.published_html || null;
+}
 
-    return jsonOk({
-      ok: true,
-      id: updated?.id || siteId,
-      status: updated?.content || "published",
-    });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Publish failed" }, { status: 500 });
+export default async function SitePage({ params }: PageProps) {
+  const siteId = params.siteId;
+
+  const html = await fetchPublishedHtml(siteId);
+
+  if (!html) {
+    return (
+      <main style={{ padding: 40, fontFamily: "system-ui" }}>
+        <h1>Site not published yet</h1>
+        <p>Click Publish in the Builder to push your draft live.</p>
+        <pre>siteId: {siteId}</pre>
+      </main>
+    );
   }
+
+  return <div dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 
