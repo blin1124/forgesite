@@ -4,7 +4,7 @@ import {
   getUserIdFromAuthHeader,
   jsonOk,
   jsonErr,
-} from "@/app/api/domain/_lib.ts";
+} from "@/app/api/domain/_lib";
 
 export const runtime = "nodejs";
 
