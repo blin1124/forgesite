@@ -1,25 +1,33 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin, getUserIdFromAuthHeader, jsonOk, jsonErr } from "@/app/api/domain/_lib";
+import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
-/**
- * Publishes a site:
- * - verifies ownership
- * - copies sites.html -> sites.published_html
- * - sets content='published'
- *
- * Requires: Authorization: Bearer <access_token>
- */
+function jsonErr(message: string, status = 400) {
+  return NextResponse.json({ error: message }, { status });
+}
+function jsonOk(payload: any = {}) {
+  return NextResponse.json(payload);
+}
+
 export async function POST(req: Request, { params }: { params: { siteId: string } }) {
   try {
-    const user_id = await getUserIdFromAuthHeader(supabaseAdmin, req);
+    const admin = getSupabaseAdmin();
+
+    // ✅ Require auth token (customer must be logged in)
+    const authHeader = req.headers.get("authorization") || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+    if (!token) return jsonErr("Missing Authorization Bearer token", 401);
+
+    const { data: userRes, error: userErr } = await admin.auth.getUser(token);
+    if (userErr || !userRes?.user?.id) return jsonErr("Invalid session", 401);
+    const user_id = userRes.user.id;
 
     const siteId = String(params?.siteId || "").trim();
     if (!siteId) return jsonErr("Missing siteId", 400);
 
-    // 1) Ensure the site belongs to user + get draft html
-    const { data: site, error: siteErr } = await supabaseAdmin
+    // 1) Verify owner + get draft html
+    const { data: site, error: siteErr } = await admin
       .from("sites")
       .select("id, user_id, html")
       .eq("id", siteId)
@@ -29,11 +37,11 @@ export async function POST(req: Request, { params }: { params: { siteId: string 
     if (!site) return jsonErr("Site not found", 404);
     if (site.user_id !== user_id) return jsonErr("Not authorized for this site", 403);
 
-    const draftHtml = String(site.html || "").trim();
-    if (!draftHtml) return jsonErr("Draft HTML is empty. Generate/Save first.", 400);
+    const draftHtml = String(site.html || "");
+    if (!draftHtml.trim()) return jsonErr("Site has no draft HTML to publish", 400);
 
-    // 2) Copy draft -> published_html and mark published
-    const { data: updated, error: upErr } = await supabaseAdmin
+    // 2) Publish = copy html -> published_html
+    const { data: updated, error: upErr } = await admin
       .from("sites")
       .update({
         content: "published",
@@ -46,13 +54,9 @@ export async function POST(req: Request, { params }: { params: { siteId: string 
 
     if (upErr) return jsonErr(upErr.message, 400);
 
-    return jsonOk({
-      ok: true,
-      id: updated?.id || siteId,
-      status: updated?.content || "published",
-    });
+    return jsonOk({ ok: true, id: updated?.id || siteId, status: updated?.content || "published" });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Publish failed" }, { status: 500 });
+    return jsonErr(e?.message || "Publish failed", 500);
   }
 }
 
