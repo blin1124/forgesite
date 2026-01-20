@@ -4,7 +4,7 @@ import {
   getUserIdFromAuthHeader,
   jsonOk,
   jsonErr,
-} from "../../../domain/lib";
+} from "@/app/api/domain/lib";
 
 export const runtime = "nodejs";
 
@@ -33,7 +33,7 @@ export async function POST(
     if (!site) return jsonErr("Site not found", 404);
     if (site.user_id !== user_id) return jsonErr("Not authorized for this site", 403);
 
-    // 2) Mark as published (your public page checks this)
+    // 2) Mark as published
     const { data: updated, error: upErr } = await supabaseAdmin
       .from("sites")
       .update({
@@ -58,6 +58,7 @@ export async function POST(
     );
   }
 }
+
 
 
 
