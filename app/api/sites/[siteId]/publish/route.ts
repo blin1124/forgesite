@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin, getUserIdFromAuthHeader, jsonOk, jsonErr } from "@/app/api/domain/lib.ts";
+import { supabaseAdmin, getUserIdFromAuthHeader, jsonOk, jsonErr } from "@/app/api/domain/_lib";
 
 export const runtime = "nodejs";
 
