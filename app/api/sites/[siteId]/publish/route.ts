@@ -1,65 +1,64 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin, getUserIdFromAuthHeader } from "@/app/api/_lib";
+import {
+  supabaseAdmin,
+  getUserIdFromAuthHeader,
+  jsonOk,
+  jsonErr,
+} from "../../../domain/lib";
 
 export const runtime = "nodejs";
 
 /**
- * Publishes a site by flipping its status in public.sites.
- * - Requires Authorization: Bearer <supabase access token>
- * - Ensures the site belongs to the signed-in user
- *
- * URL:
- * POST /api/sites/:siteId/publish
+ * Publishes a site so it can be shown on /s/:siteId and on a connected domain.
+ * Requires Authorization: Bearer <access_token>
  */
 export async function POST(
   req: Request,
-  ctx: { params: Promise<{ siteId: string }> }
+  { params }: { params: { siteId: string } }
 ) {
   try {
     const user_id = await getUserIdFromAuthHeader(supabaseAdmin, req);
-    if (!user_id) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-    const { siteId } = await ctx.params;
-    if (!siteId) return NextResponse.json({ error: "Missing siteId" }, { status: 400 });
+    const siteId = String(params?.siteId || "").trim();
+    if (!siteId) return jsonErr("Missing siteId", 400);
 
-    // 1) Confirm site exists + belongs to user
-    const { data: site, error: selErr } = await supabaseAdmin
+    // 1) Ensure the site belongs to the logged-in user
+    const { data: site, error: siteErr } = await supabaseAdmin
       .from("sites")
-      .select("id,user_id,html,content")
+      .select("id, user_id")
       .eq("id", siteId)
       .maybeSingle();
 
-    if (selErr) return NextResponse.json({ error: selErr.message }, { status: 500 });
-    if (!site) return NextResponse.json({ error: "Site not found" }, { status: 404 });
-    if (site.user_id !== user_id) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (siteErr) return jsonErr(siteErr.message, 400);
+    if (!site) return jsonErr("Site not found", 404);
+    if (site.user_id !== user_id) return jsonErr("Not authorized for this site", 403);
 
-    // 2) Must have HTML to publish
-    const html = String(site.html || "");
-    if (!html || html.length < 20) {
-      return NextResponse.json(
-        { error: "Nothing to publish yet (site.html is empty)" },
-        { status: 400 }
-      );
-    }
-
-    // 3) Publish: set content status to 'published'
-    // (This matches your current schema without adding columns.)
+    // 2) Mark as published (your public page checks this)
     const { data: updated, error: upErr } = await supabaseAdmin
       .from("sites")
-      .update({ content: "published" })
+      .update({
+        content: "published",
+        updated_at: new Date().toISOString(),
+      })
       .eq("id", siteId)
-      .eq("user_id", user_id)
-      .select("id,content")
+      .select("id, content")
       .maybeSingle();
 
-    if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
+    if (upErr) return jsonErr(upErr.message, 400);
 
-    return NextResponse.json({
+    return jsonOk({
       ok: true,
-      site_id: updated?.id || siteId,
+      id: updated?.id || siteId,
       status: updated?.content || "published",
     });
-  } catch (err: any) {
-    return NextResponse.json({ error: err?.message || "Publish failed" }, { status: 500 });
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: e?.message || "Publish failed" },
+      { status: 500 }
+    );
   }
 }
+
+
+
+
