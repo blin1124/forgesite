@@ -11,15 +11,16 @@ function normalizePath(slug?: string[]) {
 }
 
 async function fetchPublishedHtml(siteId: string) {
-  const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ""}/api/public/sites/${siteId}`, {
+  // Use a RELATIVE fetch so it works on Vercel without any env var.
+  const res = await fetch(`/api/public/sites/${encodeURIComponent(siteId)}`, {
     cache: "no-store",
   });
 
-  // If NEXT_PUBLIC_BASE_URL is not set, Next will still resolve relative fetch in production
   if (!res.ok) return null;
 
   const json = await res.json();
-  return String(json?.html || "") || null;
+  const html = String(json?.html || "");
+  return html.trim() ? html : null;
 }
 
 export default async function SitePage({ params }: PageProps) {
@@ -43,6 +44,7 @@ path: {path}
 
   return <div dangerouslySetInnerHTML={{ __html: html }} />;
 }
+
 
 
 
