@@ -1,3 +1,5 @@
+import { notFound } from "next/navigation";
+
 type PageProps = {
   params: {
     siteId: string;
@@ -11,16 +13,26 @@ function normalizePath(slug?: string[]) {
 }
 
 async function fetchPublishedHtml(siteId: string) {
-  // Use a RELATIVE fetch so it works on Vercel without any env var.
-  const res = await fetch(`/api/public/sites/${encodeURIComponent(siteId)}`, {
-    cache: "no-store",
-  });
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!url || !anon) return null;
+
+  const res = await fetch(
+    `${url}/rest/v1/sites?select=published_html&id=eq.${siteId}&limit=1`,
+    {
+      headers: {
+        apikey: anon,
+        Authorization: `Bearer ${anon}`,
+      },
+      cache: "no-store",
+    }
+  );
 
   if (!res.ok) return null;
 
   const json = await res.json();
-  const html = String(json?.html || "");
-  return html.trim() ? html : null;
+  return json?.[0]?.published_html || null;
 }
 
 export default async function SitePage({ params }: PageProps) {
@@ -33,7 +45,7 @@ export default async function SitePage({ params }: PageProps) {
     return (
       <main style={{ padding: 40, fontFamily: "system-ui" }}>
         <h1>Site not published yet</h1>
-        <p>Click Publish in the Builder to push your draft live.</p>
+        <p>Click Publish in the Builder to push your site live.</p>
         <pre>
 siteId: {siteId}
 path: {path}
@@ -44,6 +56,7 @@ path: {path}
 
   return <div dangerouslySetInnerHTML={{ __html: html }} />;
 }
+
 
 
 
