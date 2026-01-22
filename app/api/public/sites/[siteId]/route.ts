@@ -6,15 +6,14 @@ export const runtime = "nodejs";
 function jsonErr(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
-
 function jsonOk(payload: any = {}) {
   return NextResponse.json(payload);
 }
 
 /**
  * Public endpoint:
- * Returns ONLY published HTML for a site.
- * No auth required.
+ * returns ONLY published_html if content === "published"
+ * no auth required
  */
 export async function GET(
   _req: Request,
@@ -39,7 +38,6 @@ export async function GET(
     const html = String(site.published_html || "");
 
     if (!isPublished || !html.trim()) {
-      // Return ok but no html, so the page can show "not published yet"
       return jsonOk({ ok: true, published: false, html: "" });
     }
 
@@ -48,4 +46,5 @@ export async function GET(
     return jsonErr(e?.message || "Failed", 500);
   }
 }
+
 
