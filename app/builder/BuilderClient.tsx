@@ -9,7 +9,7 @@ type SiteRow = {
   template: string | null;
   prompt: string | null;
   html: string | null;
-  content?: string | null; // optional
+  content?: string | null;
   created_at: string;
 };
 
@@ -31,7 +31,6 @@ export default function BuilderClient() {
 
   const [email, setEmail] = useState<string>("");
 
-  // starts blank every time (no localStorage)
   const [apiKey, setApiKey] = useState<string>("");
   const [prompt, setPrompt] = useState<string>("");
 
@@ -95,7 +94,6 @@ export default function BuilderClient() {
     setDebug("");
   }
 
-  // accepts promptOverride to avoid stale state
   async function generateHtml(promptOverride?: string) {
     setBusy("");
     setDebug("");
@@ -164,9 +162,6 @@ export default function BuilderClient() {
     }
   }
 
-  // supports BOTH response formats:
-  // - { file_url, file_mime, file_name }
-  // - { url, mime, name }
   async function uploadFile(file: File) {
     setBusy("");
     setDebug("");
@@ -196,7 +191,6 @@ export default function BuilderClient() {
       const nextPrompt = prompt.includes(u) ? prompt : prompt + block;
 
       setPrompt(nextPrompt);
-
       setTimeout(() => generateHtml(nextPrompt), 50);
 
       setBusy("Uploaded ✅ (and regenerating)");
@@ -244,7 +238,6 @@ export default function BuilderClient() {
       const prompt_update = String(json?.prompt_update || prompt);
 
       setHistory((h) => [...h, { role: "assistant", content: reply }]);
-
       setPrompt(prompt_update);
 
       setTimeout(() => generateHtml(prompt_update), 50);
@@ -256,7 +249,6 @@ export default function BuilderClient() {
     }
   }
 
-  // ✅ PUBLISH
   async function publishSite(siteId: string) {
     setBusy("");
     setDebug("");
@@ -287,7 +279,11 @@ export default function BuilderClient() {
       }
 
       await refreshSites();
-      setBusy("Published ✅");
+
+      setBusy("Published ✅ Opening live site…");
+      // THIS is the “it did something” moment:
+      window.open(`/s/${encodeURIComponent(siteId)}`, "_blank", "noopener,noreferrer");
+
       setTimeout(() => setBusy(""), 1200);
     } catch (e: any) {
       setBusy(e?.message || "Publish failed");
@@ -324,10 +320,18 @@ export default function BuilderClient() {
         </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button style={topBtn} onClick={() => router.push("/sites")}>My Sites</button>
-          <button style={topBtn} onClick={() => router.push("/templates")}>Templates</button>
-          <button style={topBtn} onClick={() => router.push("/billing")}>Billing</button>
-          <button style={topBtn} onClick={logout}>Log out</button>
+          <button style={topBtn} onClick={() => router.push("/sites")}>
+            My Sites
+          </button>
+          <button style={topBtn} onClick={() => router.push("/templates")}>
+            Templates
+          </button>
+          <button style={topBtn} onClick={() => router.push("/billing")}>
+            Billing
+          </button>
+          <button style={topBtn} onClick={logout}>
+            Log out
+          </button>
         </div>
       </header>
 
@@ -376,7 +380,6 @@ export default function BuilderClient() {
                       <div style={{ opacity: 0.85, fontSize: 12 }}>{new Date(s.created_at).toLocaleString()}</div>
                     </button>
 
-                    {/* ✅ Buttons row */}
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                       <button style={primaryBtn} onClick={() => publishSite(s.id)} disabled={isBusy}>
                         {isBusy ? "Publishing…" : "Publish"}
@@ -390,7 +393,7 @@ export default function BuilderClient() {
                         Domain
                       </button>
 
-                      {/* ✅ FIXED VIEW BUTTON (this is the exact placement) */}
+                      {/* ✅ Step 3: View button goes right here */}
                       <button
                         style={secondaryBtn}
                         onClick={() => window.open(`/s/${encodeURIComponent(s.id)}`, "_blank", "noopener,noreferrer")}
@@ -429,8 +432,12 @@ export default function BuilderClient() {
             />
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
-              <button style={primaryBtn} onClick={() => generateHtml()}>Generate HTML</button>
-              <button style={secondaryBtn} onClick={saveSite}>Save</button>
+              <button style={primaryBtn} onClick={() => generateHtml()}>
+                Generate HTML
+              </button>
+              <button style={secondaryBtn} onClick={saveSite}>
+                Save
+              </button>
 
               <label style={uploadBtn}>
                 Upload PDF/PNG/DOCX/XLSX
@@ -446,10 +453,14 @@ export default function BuilderClient() {
               </label>
             </div>
 
-            {(fileUrl || fileName) ? (
+            {fileUrl || fileName ? (
               <div style={{ marginTop: 10, fontSize: 13, opacity: 0.95 }}>
-                <div><b>Last upload:</b> {fileName || "(no name)"} ({fileMime || "unknown"})</div>
-                <div style={{ wordBreak: "break-all" }}><b>URL:</b> {fileUrl || "(none)"}</div>
+                <div>
+                  <b>Last upload:</b> {fileName || "(no name)"} ({fileMime || "unknown"})
+                </div>
+                <div style={{ wordBreak: "break-all" }}>
+                  <b>URL:</b> {fileUrl || "(none)"}
+                </div>
               </div>
             ) : null}
 
@@ -460,7 +471,15 @@ export default function BuilderClient() {
             ) : null}
 
             {debug ? (
-              <div style={{ marginTop: 10, padding: 10, borderRadius: 12, background: "rgba(185, 28, 28, .25)", border: "1px solid rgba(185, 28, 28, .5)" }}>
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: 10,
+                  borderRadius: 12,
+                  background: "rgba(185, 28, 28, .25)",
+                  border: "1px solid rgba(185, 28, 28, .5)",
+                }}
+              >
                 <div style={{ fontWeight: 900 }}>Debug</div>
                 <div style={{ whiteSpace: "pre-wrap", fontSize: 12, opacity: 0.95 }}>{debug}</div>
               </div>
@@ -492,7 +511,9 @@ export default function BuilderClient() {
                 placeholder="Tell the AI what to change…"
                 style={{ ...input, flex: 1, minWidth: 220 }}
               />
-              <button style={primaryBtn} onClick={runChat}>Send</button>
+              <button style={primaryBtn} onClick={runChat}>
+                Send
+              </button>
 
               <button style={secondaryBtn} onClick={() => router.push("/domain")}>
                 Connect Domain
@@ -511,7 +532,7 @@ export default function BuilderClient() {
               title="preview"
               style={{ width: "100%", height: "78vh", background: "white" }}
               srcDoc={html || "<html><body style='font-family:system-ui;padding:40px'>Generate HTML to preview.</body></html>"}
-              sandbox="allow-same-origin allow-scripts"
+              sandbox="allow-same-origin"
             />
           </div>
         </section>
