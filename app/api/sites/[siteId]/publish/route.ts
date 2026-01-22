@@ -10,23 +10,35 @@ function jsonOk(payload: any = {}) {
   return NextResponse.json(payload);
 }
 
-export async function POST(req: Request, { params }: { params: { siteId: string } }) {
+/**
+ * Publish a site:
+ * - requires Authorization: Bearer <supabase access_token>
+ * - verifies ownership
+ * - copies sites.html -> sites.published_html
+ * - sets content = "published"
+ */
+export async function POST(
+  req: Request,
+  { params }: { params: { siteId: string } }
+) {
   try {
     const admin = getSupabaseAdmin();
 
-    // ✅ Require auth token (customer must be logged in)
+    const siteId = String(params?.siteId || "").trim();
+    if (!siteId) return jsonErr("Missing siteId", 400);
+
+    // Auth token
     const authHeader = req.headers.get("authorization") || "";
-    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice("Bearer ".length).trim()
+      : "";
     if (!token) return jsonErr("Missing Authorization Bearer token", 401);
 
     const { data: userRes, error: userErr } = await admin.auth.getUser(token);
     if (userErr || !userRes?.user?.id) return jsonErr("Invalid session", 401);
     const user_id = userRes.user.id;
 
-    const siteId = String(params?.siteId || "").trim();
-    if (!siteId) return jsonErr("Missing siteId", 400);
-
-    // 1) Verify owner + get draft html
+    // Load site (owner + draft html)
     const { data: site, error: siteErr } = await admin
       .from("sites")
       .select("id, user_id, html")
@@ -40,7 +52,7 @@ export async function POST(req: Request, { params }: { params: { siteId: string 
     const draftHtml = String(site.html || "");
     if (!draftHtml.trim()) return jsonErr("Site has no draft HTML to publish", 400);
 
-    // 2) Publish = copy html -> published_html
+    // Publish
     const { data: updated, error: upErr } = await admin
       .from("sites")
       .update({
@@ -54,7 +66,11 @@ export async function POST(req: Request, { params }: { params: { siteId: string 
 
     if (upErr) return jsonErr(upErr.message, 400);
 
-    return jsonOk({ ok: true, id: updated?.id || siteId, status: updated?.content || "published" });
+    return jsonOk({
+      ok: true,
+      id: updated?.id || siteId,
+      status: updated?.content || "published",
+    });
   } catch (e: any) {
     return jsonErr(e?.message || "Publish failed", 500);
   }
