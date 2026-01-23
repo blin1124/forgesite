@@ -12,13 +12,10 @@ function jsonOk(payload: any = {}) {
 
 /**
  * Public endpoint:
- * returns ONLY published_html if content === "published"
- * no auth required
+ * Returns ONLY published HTML for a site.
+ * No auth required.
  */
-export async function GET(
-  _req: Request,
-  { params }: { params: { siteId: string } }
-) {
+export async function GET(_req: Request, { params }: { params: { siteId: string } }) {
   try {
     const admin = getSupabaseAdmin();
 
@@ -46,5 +43,6 @@ export async function GET(
     return jsonErr(e?.message || "Failed", 500);
   }
 }
+
 
 
