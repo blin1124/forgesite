@@ -249,6 +249,29 @@ export default function BuilderClient() {
     }
   }
 
+  // ✅ NEW: resolve "live URL" for a site
+  // - if verified domain exists: https://domain
+  // - else: /s/{siteId}
+  async function getLiveUrlForSite(siteId: string) {
+    let openUrl = `/s/${encodeURIComponent(siteId)}`;
+
+    try {
+      const dres = await fetch(`/api/sites/${encodeURIComponent(siteId)}/domain`, { cache: "no-store" });
+      const { json: djson } = await readResponse(dres);
+
+      const domain = String(djson?.domain || "").trim();
+      const status = String(djson?.status || "").toLowerCase();
+
+      if (domain && status === "verified") {
+        openUrl = `https://${domain}`;
+      }
+    } catch {
+      // ignore lookup failures, fall back to /s/{siteId}
+    }
+
+    return openUrl;
+  }
+
   // ✅ PUBLISH (calls /api/sites/[siteId]/publish)
   async function publishSite(siteId: string) {
     setBusy("");
@@ -281,8 +304,10 @@ export default function BuilderClient() {
 
       await refreshSites();
 
+      const openUrl = await getLiveUrlForSite(siteId);
+
       setBusy("Published ✅ Opening live site…");
-      window.open(`/s/${encodeURIComponent(siteId)}`, "_blank", "noopener,noreferrer");
+      window.open(openUrl, "_blank", "noopener,noreferrer");
 
       setTimeout(() => setBusy(""), 1200);
     } catch (e: any) {
@@ -638,14 +663,4 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
-
-
-
-
-
-
-
-
-
-
 
