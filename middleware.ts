@@ -60,38 +60,50 @@ export async function middleware(req: NextRequest) {
   if (pathname.startsWith("/s/")) return NextResponse.next();
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  // If these env vars are missing, don’t break the whole app
-  if (!supabaseUrl || !supabaseAnon) return NextResponse.next();
+  // IMPORTANT: use SERVICE ROLE for middleware lookups so RLS cannot block routing
+  const serviceKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY ||
+    process.env.SUPABASE_SERVICE_ROLE;
+
+  // If missing, don’t break the app
+  if (!supabaseUrl || !serviceKey) return NextResponse.next();
 
   // Lookup: custom_domains.domain == host
-  // IMPORTANT: your custom_domains table must allow SELECT for this query (RLS)
+  // NOTE: do NOT encode the whole filter value; only ensure host is clean
   const lookupUrl =
     `${supabaseUrl}/rest/v1/custom_domains` +
     `?select=site_id,status,domain` +
-    `&domain=eq.${encodeURIComponent(host)}` +
+    `&domain=eq.${host}` +
     `&limit=1`;
 
   try {
     const r = await fetch(lookupUrl, {
       headers: {
-        apikey: supabaseAnon,
-        Authorization: `Bearer ${supabaseAnon}`,
+        apikey: serviceKey,
+        Authorization: `Bearer ${serviceKey}`,
       },
-      // avoid cache issues on edge
       cache: "no-store",
     });
 
     if (!r.ok) return NextResponse.next();
 
-    const rows = (await r.json()) as Array<{ site_id: string; status?: string; domain?: string }>;
+    const rows = (await r.json()) as Array<{
+      site_id: string | null;
+      status?: string | null;
+      domain?: string | null;
+    }>;
+
     const row = rows?.[0];
 
+    // Must be connected to a site
     if (!row?.site_id) return NextResponse.next();
 
-    // Optional: if you want to only route when active/verified:
-    // if (row.status && !["verified", "pending", "dns_required"].includes(row.status)) return NextResponse.next();
+    // Optional: only route verified domains
+    // If you want this strict behavior, uncomment:
+    // const st = String(row.status || "").toLowerCase();
+    // if (st !== "verified") return NextResponse.next();
 
     // Rewrite customer domain -> /s/{site_id}{pathname}
     const rewriteUrl = req.nextUrl.clone();
@@ -101,3 +113,4 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 }
+
