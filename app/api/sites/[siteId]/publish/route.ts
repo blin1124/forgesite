@@ -11,34 +11,28 @@ function jsonOk(payload: any = {}) {
 }
 
 /**
- * Publish a site:
- * - requires Authorization: Bearer <supabase access_token>
- * - verifies ownership
- * - copies sites.html -> sites.published_html
- * - sets content = "published"
+ * Publishes a site:
+ * - Requires Authorization: Bearer <supabase_access_token>
+ * - Verifies ownership
+ * - Copies sites.html -> sites.published_html
+ * - Sets sites.content = "published"
  */
-export async function POST(
-  req: Request,
-  { params }: { params: { siteId: string } }
-) {
+export async function POST(req: Request, { params }: { params: { siteId: string } }) {
   try {
     const admin = getSupabaseAdmin();
 
-    const siteId = String(params?.siteId || "").trim();
-    if (!siteId) return jsonErr("Missing siteId", 400);
-
-    // Auth token
     const authHeader = req.headers.get("authorization") || "";
-    const token = authHeader.startsWith("Bearer ")
-      ? authHeader.slice("Bearer ".length).trim()
-      : "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
     if (!token) return jsonErr("Missing Authorization Bearer token", 401);
 
     const { data: userRes, error: userErr } = await admin.auth.getUser(token);
     if (userErr || !userRes?.user?.id) return jsonErr("Invalid session", 401);
     const user_id = userRes.user.id;
 
-    // Load site (owner + draft html)
+    const siteId = String(params?.siteId || "").trim();
+    if (!siteId) return jsonErr("Missing siteId", 400);
+
+    // 1) Verify owner + get draft html
     const { data: site, error: siteErr } = await admin
       .from("sites")
       .select("id, user_id, html")
@@ -52,7 +46,7 @@ export async function POST(
     const draftHtml = String(site.html || "");
     if (!draftHtml.trim()) return jsonErr("Site has no draft HTML to publish", 400);
 
-    // Publish
+    // 2) Publish = copy html -> published_html
     const { data: updated, error: upErr } = await admin
       .from("sites")
       .update({
@@ -75,6 +69,7 @@ export async function POST(
     return jsonErr(e?.message || "Publish failed", 500);
   }
 }
+
 
 
 
