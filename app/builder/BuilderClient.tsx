@@ -249,6 +249,7 @@ export default function BuilderClient() {
     }
   }
 
+  // ✅ PUBLISH (calls /api/sites/[siteId]/publish)
   async function publishSite(siteId: string) {
     setBusy("");
     setDebug("");
@@ -281,7 +282,6 @@ export default function BuilderClient() {
       await refreshSites();
 
       setBusy("Published ✅ Opening live site…");
-      // THIS is the “it did something” moment:
       window.open(`/s/${encodeURIComponent(siteId)}`, "_blank", "noopener,noreferrer");
 
       setTimeout(() => setBusy(""), 1200);
@@ -393,7 +393,7 @@ export default function BuilderClient() {
                         Domain
                       </button>
 
-                      {/* ✅ Step 3: View button goes right here */}
+                      {/* ✅ View button EXACTLY like the screenshot */}
                       <button
                         style={secondaryBtn}
                         onClick={() => window.open(`/s/${encodeURIComponent(s.id)}`, "_blank", "noopener,noreferrer")}
@@ -638,6 +638,7 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
 
 
 
