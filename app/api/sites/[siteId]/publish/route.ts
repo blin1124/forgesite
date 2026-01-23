@@ -10,12 +10,26 @@ function jsonOk(payload: any = {}) {
   return NextResponse.json(payload);
 }
 
+type PublishBody = {
+  // Optional: if provided, we publish THIS (and also update draft html)
+  html?: string;
+  // Optional: allow updating prompt too (handy)
+  prompt?: string;
+};
+
 /**
  * Publishes a site:
  * - Requires Authorization: Bearer <supabase_access_token>
  * - Verifies ownership
- * - Copies sites.html -> sites.published_html
+ * - Copies *fresh* draft -> sites.published_html
  * - Sets sites.content = "published"
+ *
+ * IMPORTANT:
+ * If body.html is provided, we treat it as the source of truth:
+ *   - update sites.html = body.html
+ *   - publish published_html = body.html
+ * Otherwise:
+ *   - read sites.html and publish that
  */
 export async function POST(req: Request, { params }: { params: { siteId: string } }) {
   try {
@@ -32,10 +46,19 @@ export async function POST(req: Request, { params }: { params: { siteId: string 
     const siteId = String(params?.siteId || "").trim();
     if (!siteId) return jsonErr("Missing siteId", 400);
 
+    // Parse optional body
+    let body: PublishBody = {};
+    try {
+      // some clients may send empty body
+      body = (await req.json()) as PublishBody;
+    } catch {
+      body = {};
+    }
+
     // 1) Verify owner + get draft html
     const { data: site, error: siteErr } = await admin
       .from("sites")
-      .select("id, user_id, html")
+      .select("id, user_id, html, prompt")
       .eq("id", siteId)
       .maybeSingle();
 
@@ -43,17 +66,34 @@ export async function POST(req: Request, { params }: { params: { siteId: string 
     if (!site) return jsonErr("Site not found", 404);
     if (site.user_id !== user_id) return jsonErr("Not authorized for this site", 403);
 
-    const draftHtml = String(site.html || "");
+    const incomingHtml = typeof body.html === "string" ? body.html : "";
+    const incomingPrompt = typeof body.prompt === "string" ? body.prompt : "";
+
+    // Decide what we are publishing
+    const draftHtml =
+      incomingHtml.trim().length > 0 ? incomingHtml : String(site.html || "");
+
     if (!draftHtml.trim()) return jsonErr("Site has no draft HTML to publish", 400);
 
-    // 2) Publish = copy html -> published_html
+    // 2) Publish:
+    // If client sent html, also update the draft html to match.
+    const updatePayload: Record<string, any> = {
+      content: "published",
+      published_html: draftHtml,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (incomingHtml.trim()) {
+      updatePayload.html = draftHtml;
+    }
+
+    if (incomingPrompt.trim()) {
+      updatePayload.prompt = incomingPrompt;
+    }
+
     const { data: updated, error: upErr } = await admin
       .from("sites")
-      .update({
-        content: "published",
-        published_html: draftHtml,
-        updated_at: new Date().toISOString(),
-      })
+      .update(updatePayload)
       .eq("id", siteId)
       .select("id, content")
       .maybeSingle();
@@ -69,6 +109,7 @@ export async function POST(req: Request, { params }: { params: { siteId: string 
     return jsonErr(e?.message || "Publish failed", 500);
   }
 }
+
 
 
 
