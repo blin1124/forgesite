@@ -1,3 +1,5 @@
+import { headers } from "next/headers";
+
 type PageProps = {
   params: {
     siteId: string;
@@ -5,9 +7,24 @@ type PageProps = {
   };
 };
 
+function normalizePath(slug?: string[]) {
+  if (!slug || slug.length === 0) return "/";
+  return "/" + slug.join("/");
+}
+
+function getBaseUrlFromHeaders() {
+  const h = headers();
+  const host = h.get("x-forwarded-host") || h.get("host");
+  const proto = h.get("x-forwarded-proto") || "https";
+  if (!host) return null;
+  return `${proto}://${host}`;
+}
+
 async function fetchPublishedHtml(siteId: string) {
-  // Relative fetch works on Vercel
-  const res = await fetch(`/api/public/sites/${encodeURIComponent(siteId)}`, {
+  const base = getBaseUrlFromHeaders();
+  if (!base) return null;
+
+  const res = await fetch(`${base}/api/public/sites/${encodeURIComponent(siteId)}`, {
     cache: "no-store",
   });
 
@@ -19,7 +36,9 @@ async function fetchPublishedHtml(siteId: string) {
 }
 
 export default async function SitePage({ params }: PageProps) {
-  const siteId = String(params.siteId || "").trim();
+  const siteId = params.siteId;
+  const path = normalizePath(params.slug);
+
   const html = await fetchPublishedHtml(siteId);
 
   if (!html) {
@@ -27,13 +46,17 @@ export default async function SitePage({ params }: PageProps) {
       <main style={{ padding: 40, fontFamily: "system-ui" }}>
         <h1>Site not published yet</h1>
         <p>Click Publish in the Builder to push your site live.</p>
-        <pre>siteId: {siteId}</pre>
+        <pre>
+siteId: {siteId}
+path: {path}
+        </pre>
       </main>
     );
   }
 
   return <div dangerouslySetInnerHTML={{ __html: html }} />;
 }
+
 
 
 
