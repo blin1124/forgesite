@@ -10,26 +10,13 @@ function jsonOk(payload: any = {}) {
   return NextResponse.json(payload);
 }
 
-type PublishBody = {
-  // Optional: if provided, we publish THIS (and also update draft html)
-  html?: string;
-  // Optional: allow updating prompt too (handy)
-  prompt?: string;
-};
-
 /**
  * Publishes a site:
  * - Requires Authorization: Bearer <supabase_access_token>
  * - Verifies ownership
- * - Copies *fresh* draft -> sites.published_html
+ * - Uses body.html (if provided) else uses DB sites.html
+ * - Copies -> sites.published_html
  * - Sets sites.content = "published"
- *
- * IMPORTANT:
- * If body.html is provided, we treat it as the source of truth:
- *   - update sites.html = body.html
- *   - publish published_html = body.html
- * Otherwise:
- *   - read sites.html and publish that
  */
 export async function POST(req: Request, { params }: { params: { siteId: string } }) {
   try {
@@ -46,16 +33,18 @@ export async function POST(req: Request, { params }: { params: { siteId: string 
     const siteId = String(params?.siteId || "").trim();
     if (!siteId) return jsonErr("Missing siteId", 400);
 
-    // Parse optional body
-    let body: PublishBody = {};
+    // Read optional body (html/prompt)
+    let body: any = {};
     try {
-      // some clients may send empty body
-      body = (await req.json()) as PublishBody;
+      body = await req.json();
     } catch {
       body = {};
     }
 
-    // 1) Verify owner + get draft html
+    const bodyHtml = typeof body?.html === "string" ? body.html : "";
+    const bodyPrompt = typeof body?.prompt === "string" ? body.prompt : "";
+
+    // 1) Verify owner + get current draft html
     const { data: site, error: siteErr } = await admin
       .from("sites")
       .select("id, user_id, html, prompt")
@@ -66,36 +55,28 @@ export async function POST(req: Request, { params }: { params: { siteId: string 
     if (!site) return jsonErr("Site not found", 404);
     if (site.user_id !== user_id) return jsonErr("Not authorized for this site", 403);
 
-    const incomingHtml = typeof body.html === "string" ? body.html : "";
-    const incomingPrompt = typeof body.prompt === "string" ? body.prompt : "";
+    // 2) Choose publish source: body.html OR DB html
+    const publishHtml = (bodyHtml || String(site.html || "")).trim();
+    const nextPrompt = (bodyPrompt || String(site.prompt || "")).trim();
 
-    // Decide what we are publishing
-    const draftHtml =
-      incomingHtml.trim().length > 0 ? incomingHtml : String(site.html || "");
+    if (!publishHtml) return jsonErr("No HTML to publish (body + DB empty).", 400);
 
-    if (!draftHtml.trim()) return jsonErr("Site has no draft HTML to publish", 400);
+    const now = new Date().toISOString();
 
-    // 2) Publish:
-    // If client sent html, also update the draft html to match.
-    const updatePayload: Record<string, any> = {
-      content: "published",
-      published_html: draftHtml,
-      updated_at: new Date().toISOString(),
-    };
-
-    if (incomingHtml.trim()) {
-      updatePayload.html = draftHtml;
-    }
-
-    if (incomingPrompt.trim()) {
-      updatePayload.prompt = incomingPrompt;
-    }
-
+    // 3) Update BOTH draft html (optional but keeps DB in sync) + published_html
     const { data: updated, error: upErr } = await admin
       .from("sites")
-      .update(updatePayload)
+      .update({
+        // keep draft in sync with what user just published
+        html: publishHtml,
+        prompt: nextPrompt || null,
+
+        content: "published",
+        published_html: publishHtml,
+        updated_at: now,
+      })
       .eq("id", siteId)
-      .select("id, content")
+      .select("id, content, updated_at")
       .maybeSingle();
 
     if (upErr) return jsonErr(upErr.message, 400);
@@ -104,6 +85,7 @@ export async function POST(req: Request, { params }: { params: { siteId: string 
       ok: true,
       id: updated?.id || siteId,
       status: updated?.content || "published",
+      updated_at: updated?.updated_at || now,
     });
   } catch (e: any) {
     return jsonErr(e?.message || "Publish failed", 500);
