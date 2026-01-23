@@ -72,7 +72,7 @@ export default function BuilderClient() {
 
   async function refreshSites() {
     try {
-      const res = await fetch("/api/sites/list");
+      const res = await fetch("/api/sites/list", { cache: "no-store" });
       const { text, json } = await readResponse(res);
       if (!res.ok) throw new Error(json?.error || `List failed (${res.status}): ${text.slice(0, 200)}`);
       setSites(Array.isArray(json?.sites) ? json.sites : []);
@@ -272,7 +272,9 @@ export default function BuilderClient() {
     return openUrl;
   }
 
-  // ✅ PUBLISH (calls /api/sites/[siteId]/publish)
+  // ✅ IMPORTANT FIX:
+  // When publishing the CURRENTLY loaded site, we send the current editor html/prompt.
+  // This prevents publishing an older DB draft if Save didn't persist for any reason.
   async function publishSite(siteId: string) {
     setBusy("");
     setDebug("");
@@ -288,12 +290,23 @@ export default function BuilderClient() {
         return;
       }
 
+      const isCurrent = selectedId === siteId;
+
       const res = await fetch(`/api/sites/${encodeURIComponent(siteId)}/publish`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${token}`,
         },
+        body: JSON.stringify(
+          isCurrent
+            ? {
+                // publish what you SEE in the editor
+                html,
+                prompt,
+              }
+            : {}
+        ),
       });
 
       const { text, json } = await readResponse(res);
@@ -418,7 +431,6 @@ export default function BuilderClient() {
                         Domain
                       </button>
 
-                      {/* ✅ View button EXACTLY like the screenshot */}
                       <button
                         style={secondaryBtn}
                         onClick={() => window.open(`/s/${encodeURIComponent(s.id)}`, "_blank", "noopener,noreferrer")}
@@ -663,4 +675,6 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
+
 
