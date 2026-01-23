@@ -43,30 +43,56 @@ export async function POST(req: Request) {
     if (!prompt.trim()) return jsonError("Prompt is empty", 400);
     if (!html.trim()) return jsonError("HTML is empty. Generate first.", 400);
 
+    const now = new Date().toISOString();
+
+    // UPDATE existing
     if (id) {
       const { data, error } = await supabase
         .from("sites")
-        .update({ template, prompt, html })
+        .update({
+          template,
+          prompt,
+          html,
+          updated_at: now,
+        })
         .eq("id", id)
         .eq("user_id", user.id)
-        .select("id")
+        .select("id, updated_at")
         .single();
 
       if (error) return jsonError(error.message, 500);
-      return NextResponse.json({ ok: true, id: data.id });
+
+      return NextResponse.json({
+        ok: true,
+        id: data.id,
+        updated_at: data.updated_at,
+      });
     }
 
+    // INSERT new
     const { data, error } = await supabase
       .from("sites")
-      .insert({ user_id: user.id, template, prompt, html, content: "generated" })
-      .select("id")
+      .insert({
+        user_id: user.id,
+        template,
+        prompt,
+        html,
+        content: "generated",
+        updated_at: now,
+      })
+      .select("id, updated_at")
       .single();
 
     if (error) return jsonError(error.message, 500);
 
-    return NextResponse.json({ ok: true, id: data.id });
+    return NextResponse.json({
+      ok: true,
+      id: data.id,
+      updated_at: data.updated_at,
+    });
   } catch (err: any) {
     console.error("SAVE_ROUTE_ERROR:", err);
     return jsonError(err?.message || "Save failed", 500);
   }
 }
+
