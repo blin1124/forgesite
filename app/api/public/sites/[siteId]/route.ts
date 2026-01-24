@@ -1,48 +1,53 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
-function getSupabaseAdmin() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.NEXT_SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_SERVICE_KEY;
-
-  if (!url) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL");
-  if (!serviceKey) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
-
-  return createClient(url, serviceKey, { auth: { persistSession: false } });
+function jsonError(message: string, status = 400) {
+  return NextResponse.json({ error: message }, { status });
 }
 
-export async function GET(_: Request, { params }: { params: { siteId: string } }) {
+export async function GET(_req: Request, { params }: { params: { siteId: string } }) {
   try {
+    const admin = getSupabaseAdmin();
+
     const siteId = String(params?.siteId || "").trim();
-    if (!siteId) return NextResponse.json({ error: "Missing siteId" }, { status: 400 });
+    if (!siteId) return jsonError("Missing siteId", 400);
 
-    const supabase = getSupabaseAdmin();
-
-    const { data, error } = await supabase
+    const { data, error } = await admin
       .from("sites")
-      .select("published_html, updated_at")
+      .select("id, published_html, content, updated_at")
       .eq("id", siteId)
       .maybeSingle();
 
-    if (error || !data) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (error) return jsonError(error.message, 500);
+    if (!data) return jsonError("Not found", 404);
 
     const html = String(data.published_html || "").trim();
-    if (!html) return NextResponse.json({ html: "" }, { status: 200, headers: { "cache-control": "no-store" } });
+    if (!html) {
+      return NextResponse.json({
+        ok: true,
+        id: data.id,
+        published: false,
+        html: "",
+        content: data.content || null,
+        updated_at: data.updated_at || null,
+      });
+    }
 
-    return NextResponse.json(
-      { html, updated_at: data.updated_at },
-      { status: 200, headers: { "cache-control": "no-store" } }
-    );
+    return NextResponse.json({
+      ok: true,
+      id: data.id,
+      published: true,
+      html,
+      content: data.content || null,
+      updated_at: data.updated_at || null,
+    });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Failed" }, { status: 500 });
+    return jsonError(e?.message || "Failed", 500);
   }
 }
+
 
 
 
