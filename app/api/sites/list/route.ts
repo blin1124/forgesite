@@ -34,9 +34,9 @@ export async function GET() {
 
     const { data, error } = await supabase
       .from("sites")
-      .select("id, template, prompt, html, created_at")
+      .select("id, template, prompt, html, content, created_at, updated_at")
       .eq("user_id", user.id)
-      .order("created_at", { ascending: false });
+      .order("updated_at", { ascending: false });
 
     if (error) return jsonError(error.message, 500);
 
