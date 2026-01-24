@@ -249,9 +249,7 @@ export default function BuilderClient() {
     }
   }
 
-  // ✅ NEW: resolve "live URL" for a site
-  // - if verified domain exists: https://domain
-  // - else: /s/{siteId}
+  // resolve "live URL" for a site
   async function getLiveUrlForSite(siteId: string) {
     let openUrl = `/s/${encodeURIComponent(siteId)}`;
 
@@ -266,21 +264,22 @@ export default function BuilderClient() {
         openUrl = `https://${domain}`;
       }
     } catch {
-      // ignore lookup failures, fall back to /s/{siteId}
+      // ignore
     }
 
     return openUrl;
   }
 
-  // ✅ IMPORTANT FIX:
-  // When publishing the CURRENTLY loaded site, we send the current editor html/prompt.
-  // This prevents publishing an older DB draft if Save didn't persist for any reason.
+  // ✅ PUBLISH (now publishes EXACTLY what’s on screen)
   async function publishSite(siteId: string) {
     setBusy("");
     setDebug("");
     setPublishingId(siteId);
 
     try {
+      if (!prompt.trim()) throw new Error("Prompt is empty.");
+      if (!html.trim()) throw new Error("HTML is empty. Generate first.");
+
       const supabase = createSupabaseBrowserClient();
       const { data: sessionRes } = await supabase.auth.getSession();
       const token = sessionRes?.session?.access_token;
@@ -290,23 +289,18 @@ export default function BuilderClient() {
         return;
       }
 
-      const isCurrent = selectedId === siteId;
-
       const res = await fetch(`/api/sites/${encodeURIComponent(siteId)}/publish`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(
-          isCurrent
-            ? {
-                // publish what you SEE in the editor
-                html,
-                prompt,
-              }
-            : {}
-        ),
+        // ✅ THIS is the key: send current state
+        body: JSON.stringify({
+          template: "html",
+          prompt,
+          html,
+        }),
       });
 
       const { text, json } = await readResponse(res);
@@ -675,6 +669,8 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
+
 
 
 
