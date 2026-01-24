@@ -1,4 +1,7 @@
-import { headers } from "next/headers";
+import { createClient } from "@supabase/supabase-js";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 type PageProps = {
   params: {
@@ -12,32 +15,47 @@ function normalizePath(slug?: string[]) {
   return "/" + slug.join("/");
 }
 
-function getBaseUrlFromHeaders() {
-  const h = headers();
-  const host = h.get("x-forwarded-host") || h.get("host");
-  const proto = h.get("x-forwarded-proto") || "https";
-  if (!host) return null;
-  return `${proto}://${host}`;
+function getSupabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY;
+
+  if (!url) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL");
+  if (!serviceKey) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY (server env var)");
+
+  return createClient(url, serviceKey, {
+    auth: { persistSession: false },
+  });
 }
 
 async function fetchPublishedHtml(siteId: string) {
-  const base = getBaseUrlFromHeaders();
-  if (!base) return null;
+  const supabase = getSupabaseAdmin();
 
-  const res = await fetch(`${base}/api/public/sites/${encodeURIComponent(siteId)}`, {
-    cache: "no-store",
-  });
+  const { data, error } = await supabase
+    .from("sites")
+    .select("published_html, updated_at")
+    .eq("id", siteId)
+    .maybeSingle();
 
-  if (!res.ok) return null;
+  if (error || !data) return null;
 
-  const json = await res.json();
-  const html = String(json?.html || "");
-  return html.trim() ? html : null;
+  const html = String(data.published_html || "").trim();
+  return html ? html : null;
 }
 
 export default async function SitePage({ params }: PageProps) {
-  const siteId = params.siteId;
+  const siteId = String(params.siteId || "").trim();
   const path = normalizePath(params.slug);
+
+  if (!siteId) {
+    return (
+      <main style={{ padding: 40, fontFamily: "system-ui" }}>
+        <h1>Missing siteId</h1>
+      </main>
+    );
+  }
 
   const html = await fetchPublishedHtml(siteId);
 
@@ -54,6 +72,7 @@ path: {path}
     );
   }
 
+  // Important: serve the published HTML as-is
   return <div dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
