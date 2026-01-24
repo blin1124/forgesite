@@ -14,9 +14,13 @@ function jsonOk(payload: any = {}) {
  * Publishes a site:
  * - Requires Authorization: Bearer <supabase_access_token>
  * - Verifies ownership
- * - Uses body.html (if provided) else uses DB sites.html
- * - Copies -> sites.published_html
- * - Sets sites.content = "published"
+ * - (NEW) Accepts { html, prompt, template } from client and publishes THAT
+ * - Writes:
+ *    - sites.html (draft) = html
+ *    - sites.published_html (live) = html
+ *    - sites.prompt = prompt
+ *    - sites.content = "published"
+ *    - sites.updated_at = now()
  */
 export async function POST(req: Request, { params }: { params: { siteId: string } }) {
   try {
@@ -33,18 +37,13 @@ export async function POST(req: Request, { params }: { params: { siteId: string 
     const siteId = String(params?.siteId || "").trim();
     if (!siteId) return jsonErr("Missing siteId", 400);
 
-    // Read optional body (html/prompt)
-    let body: any = {};
-    try {
-      body = await req.json();
-    } catch {
-      body = {};
-    }
-
+    // Read optional body overrides (publish what the builder currently has)
+    const body = await req.json().catch(() => ({}));
     const bodyHtml = typeof body?.html === "string" ? body.html : "";
     const bodyPrompt = typeof body?.prompt === "string" ? body.prompt : "";
+    const bodyTemplate = typeof body?.template === "string" ? body.template : "html";
 
-    // 1) Verify owner + get current draft html
+    // 1) Verify owner + get current db draft
     const { data: site, error: siteErr } = await admin
       .from("sites")
       .select("id, user_id, html, prompt")
@@ -55,24 +54,23 @@ export async function POST(req: Request, { params }: { params: { siteId: string 
     if (!site) return jsonErr("Site not found", 404);
     if (site.user_id !== user_id) return jsonErr("Not authorized for this site", 403);
 
-    // 2) Choose publish source: body.html OR DB html
-    const publishHtml = (bodyHtml || String(site.html || "")).trim();
+    // Prefer incoming html (what’s on screen). Fall back to db draft.
+    const draftHtml = (bodyHtml || String(site.html || "")).trim();
     const nextPrompt = (bodyPrompt || String(site.prompt || "")).trim();
 
-    if (!publishHtml) return jsonErr("No HTML to publish (body + DB empty).", 400);
+    if (!draftHtml) return jsonErr("No HTML to publish (draft is empty)", 400);
 
+    // 2) Publish = write BOTH draft + live in one update
     const now = new Date().toISOString();
 
-    // 3) Update BOTH draft html (optional but keeps DB in sync) + published_html
     const { data: updated, error: upErr } = await admin
       .from("sites")
       .update({
-        // keep draft in sync with what user just published
-        html: publishHtml,
-        prompt: nextPrompt || null,
-
+        template: bodyTemplate || "html",
+        prompt: nextPrompt,
+        html: draftHtml, // keep draft in sync
         content: "published",
-        published_html: publishHtml,
+        published_html: draftHtml, // live
         updated_at: now,
       })
       .eq("id", siteId)
