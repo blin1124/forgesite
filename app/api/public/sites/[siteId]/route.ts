@@ -1,46 +1,46 @@
 import { NextResponse } from "next/server";
-import { getSupabaseAdmin } from "@/lib/supabase/admin";
+import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-function jsonErr(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status });
-}
-function jsonOk(payload: any = {}) {
-  return NextResponse.json(payload);
+function getSupabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY;
+
+  if (!url) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL");
+  if (!serviceKey) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
+
+  return createClient(url, serviceKey, { auth: { persistSession: false } });
 }
 
-/**
- * Public endpoint:
- * Returns ONLY published HTML for a site.
- * No auth required.
- */
-export async function GET(_req: Request, { params }: { params: { siteId: string } }) {
+export async function GET(_: Request, { params }: { params: { siteId: string } }) {
   try {
-    const admin = getSupabaseAdmin();
-
     const siteId = String(params?.siteId || "").trim();
-    if (!siteId) return jsonErr("Missing siteId", 400);
+    if (!siteId) return NextResponse.json({ error: "Missing siteId" }, { status: 400 });
 
-    const { data: site, error } = await admin
+    const supabase = getSupabaseAdmin();
+
+    const { data, error } = await supabase
       .from("sites")
-      .select("id, content, published_html")
+      .select("published_html, updated_at")
       .eq("id", siteId)
       .maybeSingle();
 
-    if (error) return jsonErr(error.message, 400);
-    if (!site) return jsonErr("Site not found", 404);
+    if (error || !data) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    const isPublished = String(site.content || "").toLowerCase() === "published";
-    const html = String(site.published_html || "");
+    const html = String(data.published_html || "").trim();
+    if (!html) return NextResponse.json({ html: "" }, { status: 200, headers: { "cache-control": "no-store" } });
 
-    if (!isPublished || !html.trim()) {
-      return jsonOk({ ok: true, published: false, html: "" });
-    }
-
-    return jsonOk({ ok: true, published: true, html });
+    return NextResponse.json(
+      { html, updated_at: data.updated_at },
+      { status: 200, headers: { "cache-control": "no-store" } }
+    );
   } catch (e: any) {
-    return jsonErr(e?.message || "Failed", 500);
+    return NextResponse.json({ error: e?.message || "Failed" }, { status: 500 });
   }
 }
 
