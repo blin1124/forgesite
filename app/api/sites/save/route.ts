@@ -12,7 +12,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
 
-    const id = body?.id ? String(body.id) : null; // optional for update
+    const id = body?.id ? String(body.id) : null;
     const template = body?.template ? String(body.template) : "html";
     const prompt = body?.prompt ? String(body.prompt) : "";
     const html = body?.html ? String(body.html) : "";
@@ -45,7 +45,6 @@ export async function POST(req: Request) {
 
     const now = new Date().toISOString();
 
-    // UPDATE existing
     if (id) {
       const { data, error } = await supabase
         .from("sites")
@@ -53,23 +52,18 @@ export async function POST(req: Request) {
           template,
           prompt,
           html,
+          content: "generated", // draft state
           updated_at: now,
         })
         .eq("id", id)
         .eq("user_id", user.id)
-        .select("id, updated_at")
+        .select("id")
         .single();
 
       if (error) return jsonError(error.message, 500);
-
-      return NextResponse.json({
-        ok: true,
-        id: data.id,
-        updated_at: data.updated_at,
-      });
+      return NextResponse.json({ ok: true, id: data.id });
     }
 
-    // INSERT new
     const { data, error } = await supabase
       .from("sites")
       .insert({
@@ -80,19 +74,17 @@ export async function POST(req: Request) {
         content: "generated",
         updated_at: now,
       })
-      .select("id, updated_at")
+      .select("id")
       .single();
 
     if (error) return jsonError(error.message, 500);
 
-    return NextResponse.json({
-      ok: true,
-      id: data.id,
-      updated_at: data.updated_at,
-    });
+    return NextResponse.json({ ok: true, id: data.id });
   } catch (err: any) {
     console.error("SAVE_ROUTE_ERROR:", err);
     return jsonError(err?.message || "Save failed", 500);
   }
 }
+
+
 
