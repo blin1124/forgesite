@@ -11,6 +11,7 @@ type SiteRow = {
   html: string | null;
   content?: string | null;
   created_at: string;
+  updated_at?: string | null;
 };
 
 type ChatMsg = { role: "user" | "assistant"; content: string };
@@ -33,7 +34,6 @@ export default function BuilderClient() {
 
   const [apiKey, setApiKey] = useState<string>("");
   const [prompt, setPrompt] = useState<string>("");
-
   const [html, setHtml] = useState<string>("");
 
   const [fileUrl, setFileUrl] = useState<string>("");
@@ -50,6 +50,9 @@ export default function BuilderClient() {
   const [debug, setDebug] = useState<string>("");
 
   const [publishingId, setPublishingId] = useState<string>("");
+
+  // Track whether editor has unsaved changes
+  const [isDirty, setIsDirty] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
@@ -92,6 +95,7 @@ export default function BuilderClient() {
     setChatInput("");
     setBusy("");
     setDebug("");
+    setIsDirty(false);
   }
 
   async function generateHtml(promptOverride?: string) {
@@ -119,6 +123,7 @@ export default function BuilderClient() {
       if (!nextHtml.trim()) throw new Error("Generate returned empty HTML.");
 
       setHtml(nextHtml);
+      setIsDirty(true);
       setBusy("");
     } catch (e: any) {
       setBusy(e?.message || "Generate failed");
@@ -126,15 +131,17 @@ export default function BuilderClient() {
     }
   }
 
-  async function saveSite() {
-    setBusy("");
-    setDebug("");
+  async function saveSite(opts?: { silent?: boolean }) {
+    if (!opts?.silent) {
+      setBusy("");
+      setDebug("");
+    }
 
     if (!prompt.trim()) return setBusy("Prompt is empty.");
     if (!html.trim()) return setBusy("HTML is empty. Generate first.");
 
     try {
-      setBusy("Saving…");
+      if (!opts?.silent) setBusy("Saving…");
 
       const res = await fetch("/api/sites/save", {
         method: "POST",
@@ -153,12 +160,18 @@ export default function BuilderClient() {
       const newId = String(json?.id || "");
       if (newId) setSelectedId(newId);
 
+      setIsDirty(false);
+
       await refreshSites();
-      setBusy("Saved ✅");
-      setTimeout(() => setBusy(""), 1200);
+
+      if (!opts?.silent) {
+        setBusy("Saved ✅");
+        setTimeout(() => setBusy(""), 1200);
+      }
     } catch (e: any) {
       setBusy(e?.message || "Save failed");
       setDebug(String(e?.stack || ""));
+      throw e;
     }
   }
 
@@ -191,6 +204,8 @@ export default function BuilderClient() {
       const nextPrompt = prompt.includes(u) ? prompt : prompt + block;
 
       setPrompt(nextPrompt);
+      setIsDirty(true);
+
       setTimeout(() => generateHtml(nextPrompt), 50);
 
       setBusy("Uploaded ✅ (and regenerating)");
@@ -239,6 +254,7 @@ export default function BuilderClient() {
 
       setHistory((h) => [...h, { role: "assistant", content: reply }]);
       setPrompt(prompt_update);
+      setIsDirty(true);
 
       setTimeout(() => generateHtml(prompt_update), 50);
 
@@ -249,7 +265,9 @@ export default function BuilderClient() {
     }
   }
 
-  // resolve "live URL" for a site
+  // Resolve live URL:
+  // - verified domain => https://domain
+  // - else fallback => /s/{siteId}
   async function getLiveUrlForSite(siteId: string) {
     let openUrl = `/s/${encodeURIComponent(siteId)}`;
 
@@ -270,16 +288,15 @@ export default function BuilderClient() {
     return openUrl;
   }
 
-  // ✅ PUBLISH (now publishes EXACTLY what’s on screen)
+  // Publish:
+  // IMPORTANT: If you're publishing the currently selected site AND you have local edits,
+  // auto-save first so DB html is current before publish copies to published_html.
   async function publishSite(siteId: string) {
     setBusy("");
     setDebug("");
     setPublishingId(siteId);
 
     try {
-      if (!prompt.trim()) throw new Error("Prompt is empty.");
-      if (!html.trim()) throw new Error("HTML is empty. Generate first.");
-
       const supabase = createSupabaseBrowserClient();
       const { data: sessionRes } = await supabase.auth.getSession();
       const token = sessionRes?.session?.access_token;
@@ -289,25 +306,24 @@ export default function BuilderClient() {
         return;
       }
 
+      // ✅ Auto-save local edits for the selected site before publishing
+      if (siteId === selectedId && isDirty) {
+        setBusy("Saving latest changes before publish…");
+        await saveSite({ silent: true });
+      }
+
+      setBusy("Publishing…");
+
       const res = await fetch(`/api/sites/${encodeURIComponent(siteId)}/publish`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${token}`,
         },
-        // ✅ THIS is the key: send current state
-        body: JSON.stringify({
-          template: "html",
-          prompt,
-          html,
-        }),
       });
 
       const { text, json } = await readResponse(res);
-
-      if (!res.ok) {
-        throw new Error(json?.error || `Publish failed (${res.status}): ${text.slice(0, 240)}`);
-      }
+      if (!res.ok) throw new Error(json?.error || `Publish failed (${res.status}): ${text.slice(0, 240)}`);
 
       await refreshSites();
 
@@ -389,6 +405,7 @@ export default function BuilderClient() {
                   setFileName("");
                   setBusy("");
                   setDebug("");
+                  setIsDirty(false);
                 }}
               >
                 + New
@@ -398,6 +415,7 @@ export default function BuilderClient() {
             <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
               {sites.map((s) => {
                 const isBusy = publishingId === s.id;
+                const stamp = s.updated_at || s.created_at;
 
                 return (
                   <div key={s.id} style={{ display: "grid", gap: 8 }}>
@@ -409,7 +427,9 @@ export default function BuilderClient() {
                       }}
                     >
                       <div style={{ fontWeight: 900 }}>{(s.template || "html") + " • " + s.id.slice(0, 7)}</div>
-                      <div style={{ opacity: 0.85, fontSize: 12 }}>{new Date(s.created_at).toLocaleString()}</div>
+                      <div style={{ opacity: 0.85, fontSize: 12 }}>
+                        Last updated: {stamp ? new Date(stamp).toLocaleString() : ""}
+                      </div>
                     </button>
 
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -425,9 +445,12 @@ export default function BuilderClient() {
                         Domain
                       </button>
 
+                      {/* View */}
                       <button
                         style={secondaryBtn}
-                        onClick={() => window.open(`/s/${encodeURIComponent(s.id)}`, "_blank", "noopener,noreferrer")}
+                        onClick={() =>
+                          window.open(`/s/${encodeURIComponent(s.id)}`, "_blank", "noopener,noreferrer")
+                        }
                         disabled={isBusy}
                       >
                         View
@@ -454,10 +477,15 @@ export default function BuilderClient() {
           </section>
 
           <section style={card}>
-            <div style={{ fontSize: 18, fontWeight: 900 }}>Website Prompt</div>
+            <div style={{ fontSize: 18, fontWeight: 900 }}>
+              Website Prompt {isDirty ? <span style={{ opacity: 0.85 }}>(unsaved)</span> : null}
+            </div>
             <textarea
               value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
+              onChange={(e) => {
+                setPrompt(e.target.value);
+                setIsDirty(true);
+              }}
               placeholder="Describe the site you want..."
               style={{ ...textarea, marginTop: 10 }}
             />
@@ -466,7 +494,7 @@ export default function BuilderClient() {
               <button style={primaryBtn} onClick={() => generateHtml()}>
                 Generate HTML
               </button>
-              <button style={secondaryBtn} onClick={saveSite}>
+              <button style={secondaryBtn} onClick={() => saveSite()}>
                 Save
               </button>
 
@@ -556,7 +584,15 @@ export default function BuilderClient() {
         {/* RIGHT */}
         <section style={card}>
           <div style={{ fontSize: 18, fontWeight: 900 }}>Live Preview</div>
-          <div style={{ marginTop: 10, borderRadius: 14, overflow: "hidden", border: "1px solid rgba(255,255,255,0.18)" }}>
+          <div style={{ marginTop: 10, borderRadius: 14, overflow: "hidden", border:
+          <div
+            style={{
+              marginTop: 10,
+              borderRadius: 14,
+              overflow: "hidden",
+              border: "1px solid rgba(255,255,255,0.18)",
+            }}
+          >
             <iframe
               key={`${selectedId || "new"}-${html.length}`}
               ref={iframeRef}
@@ -669,6 +705,7 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
 
 
 
