@@ -1,9 +1,8 @@
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-import { createClient } from "@supabase/supabase-js";
+import { headers } from "next/headers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 type PageProps = {
   params: {
@@ -17,44 +16,46 @@ function normalizePath(slug?: string[]) {
   return "/" + slug.join("/");
 }
 
-function getSupabaseAdmin() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.NEXT_SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_SERVICE_KEY;
-
-  if (!url) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL");
-  if (!serviceKey) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY (server env var)");
-
-  return createClient(url, serviceKey, {
-    auth: { persistSession: false },
-  });
+function getBaseUrlFromHeaders() {
+  const h = headers();
+  const host = h.get("x-forwarded-host") || h.get("host");
+  const proto = h.get("x-forwarded-proto") || "https";
+  if (!host) return null;
+  return `${proto}://${host}`;
 }
 
 async function fetchPublishedHtml(siteId: string) {
-  const supabase = getSupabaseAdmin();
+  const base = getBaseUrlFromHeaders();
+  if (!base) return null;
 
-  const { data, error } = await supabase
-    .from("sites")
-    .select("published_html, updated_at")
-    .eq("id", siteId)
-    .maybeSingle();
+  // ✅ cache buster so even intermediaries/proxies don’t serve stale
+  const url = `${base}/api/public/sites/${encodeURIComponent(siteId)}?v=${Date.now()}`;
 
-  if (error || !data) return null;
+  const res = await fetch(url, {
+    cache: "no-store",
+    // extra “do not cache” signals
+    headers: {
+      "cache-control": "no-cache, no-store, must-revalidate",
+      pragma: "no-cache",
+    },
+  });
 
-  const html = String(data.published_html || "").trim();
-  return html ? html : null;
+  if (!res.ok) return null;
+
+  const json = await res.json();
+  const html = String(json?.html || "");
+  return html.trim() ? html : null;
 }
 
 export default async function SitePage({ params }: PageProps) {
-  const siteId = String(params.siteId || "").trim();
-  const path = normalizePath(params.slug);
+  const siteId = String(params?.siteId || "").trim();
+  const path = normalizePath(params?.slug);
 
   if (!siteId) {
     return (
       <main style={{ padding: 40, fontFamily: "system-ui" }}>
         <h1>Missing siteId</h1>
+        <p>This URL is invalid.</p>
       </main>
     );
   }
@@ -66,7 +67,7 @@ export default async function SitePage({ params }: PageProps) {
       <main style={{ padding: 40, fontFamily: "system-ui" }}>
         <h1>Site not published yet</h1>
         <p>Click Publish in the Builder to push your site live.</p>
-        <pre>
+        <pre style={{ marginTop: 16, padding: 12, background: "#f3f4f6", borderRadius: 12 }}>
 siteId: {siteId}
 path: {path}
         </pre>
@@ -74,10 +75,8 @@ path: {path}
     );
   }
 
-  // Important: serve the published HTML as-is
   return <div dangerouslySetInnerHTML={{ __html: html }} />;
 }
-
 
 
 
