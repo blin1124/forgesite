@@ -2,9 +2,31 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic"; // ✅ prevent Next from caching this route
 
 function jsonError(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status });
+  return NextResponse.json(
+    { error: message },
+    {
+      status,
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+        Pragma: "no-cache",
+        Expires: "0",
+      },
+    }
+  );
+}
+
+function jsonOk(payload: any, status = 200) {
+  return NextResponse.json(payload, {
+    status,
+    headers: {
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+      Pragma: "no-cache",
+      Expires: "0",
+    },
+  });
 }
 
 export async function GET(_req: Request, { params }: { params: { siteId: string } }) {
@@ -24,8 +46,10 @@ export async function GET(_req: Request, { params }: { params: { siteId: string 
     if (!data) return jsonError("Not found", 404);
 
     const html = String(data.published_html || "").trim();
+
+    // even when not published, still no-store
     if (!html) {
-      return NextResponse.json({
+      return jsonOk({
         ok: true,
         id: data.id,
         published: false,
@@ -35,7 +59,7 @@ export async function GET(_req: Request, { params }: { params: { siteId: string 
       });
     }
 
-    return NextResponse.json({
+    return jsonOk({
       ok: true,
       id: data.id,
       published: true,
@@ -47,6 +71,7 @@ export async function GET(_req: Request, { params }: { params: { siteId: string 
     return jsonError(e?.message || "Failed", 500);
   }
 }
+
 
 
 
