@@ -2,31 +2,10 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic"; // ✅ prevent Next from caching this route
+export const dynamic = "force-dynamic";
 
 function jsonError(message: string, status = 400) {
-  return NextResponse.json(
-    { error: message },
-    {
-      status,
-      headers: {
-        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
-        Pragma: "no-cache",
-        Expires: "0",
-      },
-    }
-  );
-}
-
-function jsonOk(payload: any, status = 200) {
-  return NextResponse.json(payload, {
-    status,
-    headers: {
-      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
-      Pragma: "no-cache",
-      Expires: "0",
-    },
-  });
+  return NextResponse.json({ error: message }, { status });
 }
 
 export async function GET(_req: Request, { params }: { params: { siteId: string } }) {
@@ -38,7 +17,7 @@ export async function GET(_req: Request, { params }: { params: { siteId: string 
 
     const { data, error } = await admin
       .from("sites")
-      .select("id, published_html, content, updated_at")
+      .select("id, published_html, updated_at")
       .eq("id", siteId)
       .maybeSingle();
 
@@ -47,32 +26,21 @@ export async function GET(_req: Request, { params }: { params: { siteId: string 
 
     const html = String(data.published_html || "").trim();
 
-    // even when not published, still no-store
-    if (!html) {
-      return jsonOk({
-        ok: true,
-        id: data.id,
-        published: false,
-        html: "",
-        content: data.content || null,
-        updated_at: data.updated_at || null,
-      });
-    }
-
-    return jsonOk({
+    const res = NextResponse.json({
       ok: true,
       id: data.id,
-      published: true,
-      html,
-      content: data.content || null,
+      published: Boolean(html),
+      html: html || "",
       updated_at: data.updated_at || null,
     });
+
+    // 🔥 Do not allow CDN / browser caching
+    res.headers.set("cache-control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.headers.set("pragma", "no-cache");
+    res.headers.set("expires", "0");
+
+    return res;
   } catch (e: any) {
     return jsonError(e?.message || "Failed", 500);
   }
 }
-
-
-
-
-
