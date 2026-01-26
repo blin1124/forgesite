@@ -1,73 +1,101 @@
-import OpenAI from "openai";
+import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-function stripFences(s: string) {
-  // removes ```html ... ``` if the model tries it
-  return s.replace(/^```[a-zA-Z]*\s*/m, "").replace(/```$/m, "").trim();
+function jsonError(message: string, status = 400) {
+  return NextResponse.json({ error: message }, { status });
+}
+
+function extractHtml(raw: string) {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+
+  // Pull from ```html fences if present
+  const fenceMatch =
+    text.match(/```html\s*([\s\S]*?)\s*```/i) ||
+    text.match(/```\s*([\s\S]*?)\s*```/i);
+
+  const unfenced = (fenceMatch?.[1] ?? text).trim();
+
+  // Full doc already?
+  if (/<html[\s>]/i.test(unfenced) && /<\/html>/i.test(unfenced)) return unfenced;
+
+  // Has head/body but no html wrapper
+  if (/<head[\s>]/i.test(unfenced) || /<body[\s>]/i.test(unfenced)) {
+    return `<!doctype html>\n<html lang="en">\n${unfenced}\n</html>`;
+  }
+
+  // Fragment only -> wrap
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ForgeSite</title>
+</head>
+<body>
+${unfenced}
+</body>
+</html>`;
 }
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const apiKey = String(body?.apiKey || "");
-    const prompt = String(body?.prompt || "");
+    const body = await req.json();
+    const apiKey = String(body?.apiKey || "").trim();
+    const prompt = String(body?.prompt || "").trim();
 
-    if (!apiKey || !apiKey.startsWith("sk-")) {
-      return Response.json({ error: "Missing/invalid apiKey. Paste your OpenAI key into the Builder page." }, { status: 400 });
-    }
-    if (!prompt.trim()) {
-      return Response.json({ error: "Missing prompt" }, { status: 400 });
-    }
-
-    const client = new OpenAI({ apiKey });
+    if (!apiKey) return jsonError("Missing apiKey", 400);
+    if (!prompt) return jsonError("Missing prompt", 400);
 
     const system = [
-      "You are a website generator.",
-      "Return ONLY valid HTML. No markdown. No backticks.",
-      "Must start with <html> and end with </html>.",
-      "Include <head> and <body>.",
-      "Put CSS in a single <style> inside <head>.",
-      "Make it modern, clean, and responsive.",
-      "If the prompt includes an IMAGE URL, use it exactly in <img src='...'>.",
-      "If the prompt includes a PDF URL, add a Documents section with:",
-      " - View link target=_blank",
-      " - Download link",
-      " - Embedded preview using <object> or <embed> (preferred over iframe).",
-    ].join(" ");
+      "You generate a complete single-file website as HTML.",
+      "Return ONLY the raw HTML document.",
+      "Must include: <!doctype html>, <html>, <head>, <body>, and closing tags.",
+      "Do NOT wrap in markdown fences.",
+      "Do NOT return JSON.",
+      "No commentary."
+    ].join("\n");
 
-    const resp = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.6,
-      max_tokens: 1500,
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        temperature: 0.7,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: prompt },
+        ],
+      }),
     });
 
-    const raw = resp.choices?.[0]?.message?.content || "";
-    const html = stripFences(raw);
+    const text = await res.text();
+    let json: any = null;
+    try {
+      json = JSON.parse(text);
+    } catch {}
 
-    if (!html.startsWith("<html") || !html.endsWith("</html>")) {
-      return Response.json(
-        { error: "Model did not return raw <html>...</html>. Try Generate again (or tighten prompt).", raw: raw.slice(0, 400) },
-        { status: 500 }
-      );
+    if (!res.ok) {
+      const msg = json?.error?.message || text.slice(0, 500) || `OpenAI error (${res.status})`;
+      return jsonError(msg, 500);
     }
 
-    return Response.json({ html });
-  } catch (err: any) {
-    console.error("GENERATE_ERROR:", err);
-    return Response.json({ error: err?.message || "Server error in /api/generate" }, { status: 500 });
+    const content =
+      json?.choices?.[0]?.message?.content ??
+      json?.choices?.[0]?.text ??
+      "";
+
+    const html = extractHtml(content);
+
+    if (!html.trim()) return jsonError("Model returned empty output", 500);
+
+    return NextResponse.json({ html });
+  } catch (e: any) {
+    return jsonError(e?.message || "Generate failed", 500);
   }
 }
-
-
-
-
-
-
-
-
 
