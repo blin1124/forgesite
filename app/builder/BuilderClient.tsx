@@ -58,6 +58,12 @@ export default function BuilderClient() {
 
   const canUseAI = useMemo(() => apiKey.trim().startsWith("sk-"), [apiKey]);
 
+  // ✅ Fix C helper: force fresh loads when opening live URLs
+  function withBust(url: string) {
+    const bust = `v=${Date.now()}`;
+    return url.includes("?") ? `${url}&${bust}` : `${url}?${bust}`;
+  }
+
   useEffect(() => {
     const run = async () => {
       try {
@@ -327,7 +333,8 @@ export default function BuilderClient() {
       const openUrl = await getLiveUrlForSite(siteId);
 
       setBusy("Published ✅ Opening live site…");
-      window.open(openUrl, "_blank", "noopener,noreferrer");
+      // ✅ Fix C: bust cache on open
+      window.open(withBust(openUrl), "_blank", "noopener,noreferrer");
 
       setTimeout(() => setBusy(""), 1200);
     } catch (e: any) {
@@ -444,7 +451,10 @@ export default function BuilderClient() {
 
                       <button
                         style={secondaryBtn}
-                        onClick={() => window.open(`/s/${encodeURIComponent(s.id)}`, "_blank", "noopener,noreferrer")}
+                        onClick={() => {
+                          const url = withBust(`/s/${encodeURIComponent(s.id)}`);
+                          window.open(url, "_blank", "noopener,noreferrer");
+                        }}
                         disabled={isBusy}
                       >
                         View
@@ -702,11 +712,3 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
-
-
-
-
-
-
-
-
