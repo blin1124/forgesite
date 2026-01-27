@@ -4,10 +4,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 type PageProps = {
-  params: {
-    siteId: string;
-    slug?: string[];
-  };
+  params: { siteId: string; slug?: string[] };
 };
 
 function normalizePath(slug?: string[]) {
@@ -23,52 +20,38 @@ function getBaseUrlFromHeaders() {
   return `${proto}://${host}`;
 }
 
-async function fetchPublishedHtml(siteId: string, path: string) {
+async function fetchPublishedHtml(siteId: string) {
   const base = getBaseUrlFromHeaders();
-  if (!base) return { html: null as string | null, debug: "Missing host headers" };
+  if (!base) return null;
 
-  // ✅ hard-bust any accidental CDN/runtime caching
-  const t = Date.now();
-
-  // Pass path through as a hint for future multi-page support (safe to ignore server-side)
-  const url = `${base}/api/public/sites/${encodeURIComponent(siteId)}?t=${t}&path=${encodeURIComponent(path)}`;
-
-  const res = await fetch(url, {
+  const res = await fetch(`${base}/api/public/sites/${encodeURIComponent(siteId)}`, {
     cache: "no-store",
     headers: { "cache-control": "no-cache" },
   });
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    return { html: null as string | null, debug: `Public fetch failed (${res.status}): ${text.slice(0, 200)}` };
-  }
+  if (!res.ok) return null;
 
-  const json = await res.json().catch(() => null);
-  const html = String(json?.html || "").trim();
-  const updated_at = json?.updated_at ?? null;
+  const json = await res.json();
 
-  if (!html) {
-    return { html: null as string | null, debug: `No published_html (updated_at: ${updated_at || "n/a"})` };
-  }
-
-  return { html, debug: `OK (updated_at: ${updated_at || "n/a"})` };
+  // ✅ IMPORTANT: prefer published_html; fallback to html if you want
+  const html = String(json?.published_html || json?.html || "");
+  return html.trim() ? html : null;
 }
 
 export default async function SitePage({ params }: PageProps) {
-  const siteId = String(params.siteId || "");
+  const siteId = params.siteId;
   const path = normalizePath(params.slug);
 
-  const { html, debug } = await fetchPublishedHtml(siteId, path);
+  const html = await fetchPublishedHtml(siteId);
 
   if (!html) {
     return (
       <main style={{ padding: 40, fontFamily: "system-ui" }}>
         <h1>Site not published yet</h1>
         <p>Click Publish in the Builder to push your site live.</p>
-        <pre style={{ whiteSpace: "pre-wrap" }}>
+        <pre>
 siteId: {siteId}
 path: {path}
-debug: {debug}
         </pre>
       </main>
     );
@@ -76,6 +59,7 @@ debug: {debug}
 
   return <div dangerouslySetInnerHTML={{ __html: html }} />;
 }
+
 
 
 
