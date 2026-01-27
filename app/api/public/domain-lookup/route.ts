@@ -24,6 +24,13 @@ function normalizeHost(input: string) {
     .split(":")[0];
 }
 
+function buildCandidates(host: string) {
+  const a = host;
+  const b = host.startsWith("www.") ? host.slice(4) : `www.${host}`;
+  // de-dupe without Set
+  return a === b ? [a] : [a, b];
+}
+
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
@@ -33,63 +40,7 @@ export async function GET(req: Request) {
 
     const admin = getSupabaseAdmin();
 
-    // Try exact, then www<->apex fallback
-    const candidates = new Set<string>([host]);
-    if (host.startsWith("www.")) candidates.add(host.slice(4));
-    else candidates.add(`www.${host}`);
+    const candidates = buildCandidates(host);
 
     let found:
-      | { site_id: string; domain: string; status: string | null; verified: boolean | null }
-      | null = null;
-
-    for (const candidate of candidates) {
-      const { data, error } = await admin
-        .from("custom_domains")
-        .select("site_id, domain, status, verified")
-        .eq("domain", candidate)
-        .order("created_at", { ascending: false })
-        .limit(1);
-
-      if (error) return jsonErr(error.message, 500);
-
-      const row = data?.[0];
-      if (row?.site_id) {
-        found = {
-          site_id: String(row.site_id),
-          domain: String(row.domain || candidate),
-          status: row.status ?? null,
-          verified: row.verified ?? null,
-        };
-        break;
-      }
-    }
-
-    if (!found) {
-      return noStore(
-        NextResponse.json({ ok: true, host, siteId: "", status: "not_found", verified: false }, { status: 200 })
-      );
-    }
-
-    const status = String(found.status || "").toLowerCase();
-    const verified = Boolean(found.verified);
-
-    // ✅ usable if boolean verified OR status indicates ready
-    const isUsable = verified || status === "verified" || status === "active";
-
-    return noStore(
-      NextResponse.json(
-        {
-          ok: true,
-          host,
-          domain: found.domain,
-          status: found.status || "",
-          verified,
-          siteId: isUsable ? found.site_id : "",
-        },
-        { status: 200 }
-      )
-    );
-  } catch (e: any) {
-    return jsonErr(e?.message || "Failed", 500);
-  }
-}
+      | { site_id: string; domain: string; st_
