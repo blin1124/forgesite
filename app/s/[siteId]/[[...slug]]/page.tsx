@@ -15,16 +15,16 @@ function normalizePath(slug?: string[]) {
   return "/" + slug.join("/");
 }
 
-async function getBaseUrlFromHeaders() {
-  const h = await headers();
+function getBaseUrlFromHeadersSync() {
+  // In Next, headers() is sync. Do NOT await it.
+  const h = headers();
 
   const host = h.get("x-forwarded-host") || h.get("host");
-  // If your proxy doesn’t send x-forwarded-proto, default to https.
   const proto = h.get("x-forwarded-proto") || "https";
 
   if (host) return `${proto}://${host}`;
 
-  // ✅ Fallback if headers are missing (rare, but can happen)
+  // Fallback if headers are missing
   const envBase = process.env.NEXT_PUBLIC_SITE_URL;
   if (envBase) return envBase;
 
@@ -32,24 +32,38 @@ async function getBaseUrlFromHeaders() {
 }
 
 async function fetchPublishedHtml(siteId: string) {
-  const base = await getBaseUrlFromHeaders();
+  const base = getBaseUrlFromHeadersSync();
   if (!base) return null;
 
-  const res = await fetch(`${base}/api/public/sites/${encodeURIComponent(siteId)}`, {
+  const url = `${base}/api/public/sites/${encodeURIComponent(siteId)}?v=${Date.now()}`;
+
+  const res = await fetch(url, {
     cache: "no-store",
-    headers: { "cache-control": "no-cache" },
+    headers: {
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      pragma: "no-cache",
+      expires: "0",
+    },
   });
 
   if (!res.ok) return null;
 
-  const json = await res.json();
+  const json = await res.json().catch(() => null);
   const html = String(json?.html || "");
   return html.trim() ? html : null;
 }
 
 export default async function SitePage({ params }: PageProps) {
-  const siteId = String(params.siteId || "").trim();
-  const path = normalizePath(params.slug);
+  const siteId = String(params?.siteId || "").trim();
+  const path = normalizePath(params?.slug);
+
+  if (!siteId) {
+    return (
+      <main style={{ padding: 40, fontFamily: "system-ui" }}>
+        <h1>Missing siteId</h1>
+      </main>
+    );
+  }
 
   const html = await fetchPublishedHtml(siteId);
 
@@ -66,9 +80,20 @@ path: {path}
     );
   }
 
-  return <div dangerouslySetInnerHTML={{ __html: html }} />;
+  // Optional: add a base tag so relative links/assets work when visiting /s/{id}/...
+  // This helps if generated HTML uses relative URLs like "./style.css" or "/images/..."
+  return (
+    <html>
+      <head>
+        <base href={path.endsWith("/") ? path : path + "/"} />
+        <meta httpEquiv="cache-control" content="no-store, no-cache, must-revalidate, proxy-revalidate" />
+        <meta httpEquiv="pragma" content="no-cache" />
+        <meta httpEquiv="expires" content="0" />
+      </head>
+      <body dangerouslySetInnerHTML={{ __html: html }} />
+    </html>
+  );
 }
-
 
 
 
