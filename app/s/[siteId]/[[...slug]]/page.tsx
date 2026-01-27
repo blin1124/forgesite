@@ -4,7 +4,10 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 type PageProps = {
-  params: { siteId: string; slug?: string[] };
+  params: {
+    siteId: string;
+    slug?: string[];
+  };
 };
 
 function normalizePath(slug?: string[]) {
@@ -24,6 +27,7 @@ async function fetchPublishedHtml(siteId: string) {
   const base = getBaseUrlFromHeaders();
   if (!base) return null;
 
+  // IMPORTANT: this endpoint must return published_html as `html`
   const res = await fetch(`${base}/api/public/sites/${encodeURIComponent(siteId)}`, {
     cache: "no-store",
     headers: { "cache-control": "no-cache" },
@@ -32,9 +36,7 @@ async function fetchPublishedHtml(siteId: string) {
   if (!res.ok) return null;
 
   const json = await res.json();
-
-  // ✅ IMPORTANT: prefer published_html; fallback to html if you want
-  const html = String(json?.published_html || json?.html || "");
+  const html = String(json?.html || "");
   return html.trim() ? html : null;
 }
 
@@ -59,9 +61,6 @@ path: {path}
 
   return <div dangerouslySetInnerHTML={{ __html: html }} />;
 }
-
-
-
 
 
 
