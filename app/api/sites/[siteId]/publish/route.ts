@@ -6,10 +6,15 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function jsonErr(message: string, status = 400) {
-  return NextResponse.json({ ok: false, error: message }, { status });
+  const res = NextResponse.json({ ok: false, error: message }, { status });
+  res.headers.set("cache-control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.headers.set("pragma", "no-cache");
+  res.headers.set("expires", "0");
+  return res;
 }
 
-function noStore(res: NextResponse) {
+function jsonOk(payload: any = {}) {
+  const res = NextResponse.json(payload);
   res.headers.set("cache-control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.headers.set("pragma", "no-cache");
   res.headers.set("expires", "0");
@@ -22,12 +27,14 @@ export async function POST(req: Request, { params }: { params: { siteId: string 
     if (!siteId) return jsonErr("Missing siteId", 400);
 
     const auth = req.headers.get("authorization") || "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
     if (!token) return jsonErr("Missing auth token", 401);
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+    if (!supabaseUrl || !anonKey) return jsonErr("Missing Supabase env", 500);
 
+    // Verify user from the passed access token
     const userClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: `Bearer ${token}` } },
       auth: { persistSession: false },
@@ -39,7 +46,7 @@ export async function POST(req: Request, { params }: { params: { siteId: string 
     const userId = userRes.user.id;
     const admin = getSupabaseAdmin();
 
-    // Load latest saved draft HTML
+    // Always fetch latest saved draft html from DB
     const { data: site, error: siteErr } = await admin
       .from("sites")
       .select("id, user_id, html")
@@ -53,29 +60,25 @@ export async function POST(req: Request, { params }: { params: { siteId: string 
     const latestHtml = String(site.html || "").trim();
     if (!latestHtml) return jsonErr("Site html is empty", 400);
 
-    // Publish = copy html → published_html (no published_at column)
+    // ✅ Publish = copy draft html -> published_html (NO published_at / updated_at)
     const { error: upErr } = await admin
       .from("sites")
-      .update({
-        published_html: latestHtml,
-        updated_at: new Date().toISOString(),
-      })
+      .update({ published_html: latestHtml })
       .eq("id", siteId);
 
     if (upErr) return jsonErr(upErr.message, 500);
 
-    return noStore(
-      NextResponse.json({
-        ok: true,
-        siteId,
-        published: true,
-        bytes: latestHtml.length,
-      })
-    );
+    return jsonOk({
+      ok: true,
+      siteId,
+      published: true,
+      bytes: latestHtml.length,
+    });
   } catch (e: any) {
     return jsonErr(e?.message || "Publish failed", 500);
   }
 }
+
 
 
 
