@@ -1,76 +1,81 @@
 import { NextResponse } from "next/server";
-import { createServerClient } from "@supabase/ssr";
-import { cookies } from "next/headers";
+import { createClient } from "@supabase/supabase-js";
+import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function jsonError(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status });
+function jsonErr(message: string, status = 400) {
+  return NextResponse.json({ ok: false, error: message }, { status });
 }
 
-export async function POST(req: Request) {
+function noStore(res: NextResponse) {
+  res.headers.set("cache-control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.headers.set("pragma", "no-cache");
+  res.headers.set("expires", "0");
+  return res;
+}
+
+export async function POST(req: Request, { params }: { params: { siteId: string } }) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const id = body?.id ? String(body.id) : null;
-    if (!id) return jsonError("Missing site id", 400);
+    const siteId = String(params?.siteId || "").trim();
+    if (!siteId) return jsonErr("Missing siteId", 400);
 
-    const cookieStore = await cookies();
+    const auth = req.headers.get("authorization") || "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    if (!token) return jsonErr("Missing auth token", 401);
 
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, value, options);
-            });
-          },
-        },
-      }
-    );
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-    const { data: userRes } = await supabase.auth.getUser();
-    const user = userRes?.user;
-    if (!user) return jsonError("Not signed in", 401);
+    const userClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { persistSession: false },
+    });
 
-    // 1) Load the latest draft html
-    const { data: site, error: readErr } = await supabase
+    const { data: userRes, error: userErr } = await userClient.auth.getUser();
+    if (userErr || !userRes?.user) return jsonErr("Unauthorized", 401);
+
+    const userId = userRes.user.id;
+    const admin = getSupabaseAdmin();
+
+    // Fetch latest saved draft HTML
+    const { data: site, error: siteErr } = await admin
       .from("sites")
-      .select("id, html")
-      .eq("id", id)
-      .eq("user_id", user.id)
-      .single();
+      .select("id, user_id, html")
+      .eq("id", siteId)
+      .maybeSingle();
 
-    if (readErr) return jsonError(readErr.message, 500);
+    if (siteErr) return jsonErr(siteErr.message, 500);
+    if (!site) return jsonErr("Site not found", 404);
+    if (String(site.user_id) !== String(userId)) return jsonErr("Forbidden", 403);
 
-    const draftHtml = String(site?.html || "").trim();
-    if (!draftHtml) return jsonError("Nothing to publish (html is empty)", 400);
+    const latestHtml = String(site.html || "").trim();
+    if (!latestHtml) return jsonErr("Site html is empty", 400);
 
+    // Publish draft -> published_html
     const now = new Date().toISOString();
-
-    // 2) Copy draft -> published
-    const { error: writeErr } = await supabase
+    const { error: upErr } = await admin
       .from("sites")
       .update({
-        published_html: draftHtml,
-        published_at: now,
-        content: "published",
-        updated_at: now,
+        published_html: latestHtml,
+        published_at: now, // <-- this is why we added the column
       })
-      .eq("id", id)
-      .eq("user_id", user.id);
+      .eq("id", siteId);
 
-    if (writeErr) return jsonError(writeErr.message, 500);
+    if (upErr) return jsonErr(upErr.message, 500);
 
-    return NextResponse.json({ ok: true, id, published_at: now });
-  } catch (err: any) {
-    console.error("PUBLISH_ROUTE_ERROR:", err);
-    return jsonError(err?.message || "Publish failed", 500);
+    return noStore(
+      NextResponse.json({
+        ok: true,
+        siteId,
+        published: true,
+        bytes: latestHtml.length,
+        published_at: now,
+      })
+    );
+  } catch (e: any) {
+    return jsonErr(e?.message || "Publish failed", 500);
   }
 }
 
