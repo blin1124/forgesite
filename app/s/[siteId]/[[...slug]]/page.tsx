@@ -15,19 +15,26 @@ function normalizePath(slug?: string[]) {
   return "/" + slug.join("/");
 }
 
-function getBaseUrlFromHeaders() {
-  const h = headers();
+async function getBaseUrlFromHeaders() {
+  const h = await headers();
+
   const host = h.get("x-forwarded-host") || h.get("host");
+  // If your proxy doesn’t send x-forwarded-proto, default to https.
   const proto = h.get("x-forwarded-proto") || "https";
-  if (!host) return null;
-  return `${proto}://${host}`;
+
+  if (host) return `${proto}://${host}`;
+
+  // ✅ Fallback if headers are missing (rare, but can happen)
+  const envBase = process.env.NEXT_PUBLIC_SITE_URL;
+  if (envBase) return envBase;
+
+  return null;
 }
 
 async function fetchPublishedHtml(siteId: string) {
-  const base = getBaseUrlFromHeaders();
+  const base = await getBaseUrlFromHeaders();
   if (!base) return null;
 
-  // IMPORTANT: this endpoint must return published_html as `html`
   const res = await fetch(`${base}/api/public/sites/${encodeURIComponent(siteId)}`, {
     cache: "no-store",
     headers: { "cache-control": "no-cache" },
@@ -41,7 +48,7 @@ async function fetchPublishedHtml(siteId: string) {
 }
 
 export default async function SitePage({ params }: PageProps) {
-  const siteId = params.siteId;
+  const siteId = String(params.siteId || "").trim();
   const path = normalizePath(params.slug);
 
   const html = await fetchPublishedHtml(siteId);
@@ -51,7 +58,7 @@ export default async function SitePage({ params }: PageProps) {
       <main style={{ padding: 40, fontFamily: "system-ui" }}>
         <h1>Site not published yet</h1>
         <p>Click Publish in the Builder to push your site live.</p>
-        <pre>
+        <pre style={{ background: "#111", color: "#fff", padding: 12, borderRadius: 8 }}>
 siteId: {siteId}
 path: {path}
         </pre>
