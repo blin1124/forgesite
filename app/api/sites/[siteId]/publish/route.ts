@@ -1,90 +1,78 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 function jsonErr(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status });
-}
-function jsonOk(payload: any = {}) {
-  return NextResponse.json(payload);
+  return NextResponse.json({ ok: false, error: message }, { status });
 }
 
-/**
- * Publishes a site:
- * - Requires Authorization: Bearer <supabase_access_token>
- * - Verifies ownership
- * - (NEW) Accepts { html, prompt, template } from client and publishes THAT
- * - Writes:
- *    - sites.html (draft) = html
- *    - sites.published_html (live) = html
- *    - sites.prompt = prompt
- *    - sites.content = "published"
- *    - sites.updated_at = now()
- */
+function noStore(res: NextResponse) {
+  res.headers.set("cache-control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.headers.set("pragma", "no-cache");
+  res.headers.set("expires", "0");
+  return res;
+}
+
 export async function POST(req: Request, { params }: { params: { siteId: string } }) {
   try {
-    const admin = getSupabaseAdmin();
-
-    const authHeader = req.headers.get("authorization") || "";
-    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
-    if (!token) return jsonErr("Missing Authorization Bearer token", 401);
-
-    const { data: userRes, error: userErr } = await admin.auth.getUser(token);
-    if (userErr || !userRes?.user?.id) return jsonErr("Invalid session", 401);
-    const user_id = userRes.user.id;
-
     const siteId = String(params?.siteId || "").trim();
     if (!siteId) return jsonErr("Missing siteId", 400);
 
-    // Read optional body overrides (publish what the builder currently has)
-    const body = await req.json().catch(() => ({}));
-    const bodyHtml = typeof body?.html === "string" ? body.html : "";
-    const bodyPrompt = typeof body?.prompt === "string" ? body.prompt : "";
-    const bodyTemplate = typeof body?.template === "string" ? body.template : "html";
+    const auth = req.headers.get("authorization") || "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    if (!token) return jsonErr("Missing auth token", 401);
 
-    // 1) Verify owner + get current db draft
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+    const userClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { persistSession: false },
+    });
+
+    const { data: userRes, error: userErr } = await userClient.auth.getUser();
+    if (userErr || !userRes?.user) return jsonErr("Unauthorized", 401);
+
+    const userId = userRes.user.id;
+    const admin = getSupabaseAdmin();
+
+    // ✅ always fetch latest saved draft html
     const { data: site, error: siteErr } = await admin
       .from("sites")
-      .select("id, user_id, html, prompt")
+      .select("id, user_id, html")
       .eq("id", siteId)
       .maybeSingle();
 
-    if (siteErr) return jsonErr(siteErr.message, 400);
+    if (siteErr) return jsonErr(siteErr.message, 500);
     if (!site) return jsonErr("Site not found", 404);
-    if (site.user_id !== user_id) return jsonErr("Not authorized for this site", 403);
+    if (String(site.user_id) !== String(userId)) return jsonErr("Forbidden", 403);
 
-    // Prefer incoming html (what’s on screen). Fall back to db draft.
-    const draftHtml = (bodyHtml || String(site.html || "")).trim();
-    const nextPrompt = (bodyPrompt || String(site.prompt || "")).trim();
+    const latestHtml = String(site.html || "").trim();
+    if (!latestHtml) return jsonErr("Site html is empty", 400);
 
-    if (!draftHtml) return jsonErr("No HTML to publish (draft is empty)", 400);
-
-    // 2) Publish = write BOTH draft + live in one update
-    const now = new Date().toISOString();
-
-    const { data: updated, error: upErr } = await admin
+    // ✅ THIS IS THE FIX
+    const { error: upErr } = await admin
       .from("sites")
       .update({
-        template: bodyTemplate || "html",
-        prompt: nextPrompt,
-        html: draftHtml, // keep draft in sync
-        content: "published",
-        published_html: draftHtml, // live
-        updated_at: now,
+        published_html: latestHtml,
+        published_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       })
-      .eq("id", siteId)
-      .select("id, content, updated_at")
-      .maybeSingle();
+      .eq("id", siteId);
 
-    if (upErr) return jsonErr(upErr.message, 400);
+    if (upErr) return jsonErr(upErr.message, 500);
 
-    return jsonOk({
-      ok: true,
-      id: updated?.id || siteId,
-      status: updated?.content || "published",
-      updated_at: updated?.updated_at || now,
-    });
+    return noStore(
+      NextResponse.json({
+        ok: true,
+        siteId,
+        published: true,
+        bytes: latestHtml.length,
+      })
+    );
   } catch (e: any) {
     return jsonErr(e?.message || "Publish failed", 500);
   }
