@@ -10,23 +10,19 @@ function jsonErr(message: string, status = 400) {
 }
 
 function noStore(res: NextResponse) {
-  res.headersset?.("cache-control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.headers.set("cache-control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.headers.set("pragma", "no-cache");
   res.headers.set("expires", "0");
   return res;
 }
 
-export async function POST(
-  req: Request,
-  { params }: { params: { siteId: string } }
-) {
+export async function POST(req: Request, { params }: { params: { siteId: string } }) {
   try {
     const siteId = String(params?.siteId || "").trim();
     if (!siteId) return jsonErr("Missing siteId", 400);
 
     const auth = req.headers.get("authorization") || "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
     if (!token) return jsonErr("Missing auth token", 401);
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -37,16 +33,13 @@ export async function POST(
       auth: { persistSession: false },
     });
 
-    const { data: userRes, error: userErr } =
-      await userClient.auth.getUser();
-
-    if (userErr || !userRes?.user)
-      return jsonErr("Unauthorized", 401);
+    const { data: userRes, error: userErr } = await userClient.auth.getUser();
+    if (userErr || !userRes?.user) return jsonErr("Unauthorized", 401);
 
     const userId = userRes.user.id;
     const admin = getSupabaseAdmin();
 
-    // ✅ Always load the latest saved draft HTML
+    // Load latest saved draft HTML
     const { data: site, error: siteErr } = await admin
       .from("sites")
       .select("id, user_id, html")
@@ -55,19 +48,17 @@ export async function POST(
 
     if (siteErr) return jsonErr(siteErr.message, 500);
     if (!site) return jsonErr("Site not found", 404);
-    if (String(site.user_id) !== String(userId))
-      return jsonErr("Forbidden", 403);
+    if (String(site.user_id) !== String(userId)) return jsonErr("Forbidden", 403);
 
     const latestHtml = String(site.html || "").trim();
-    if (!latestHtml)
-      return jsonErr("Site html is empty", 400);
+    if (!latestHtml) return jsonErr("Site html is empty", 400);
 
-    // ✅ Publish = copy html → published_html
+    // Publish = copy html → published_html (no published_at column)
     const { error: upErr } = await admin
       .from("sites")
       .update({
         published_html: latestHtml,
-        updated_at: new Date().toISOString(), // ✅ keep this
+        updated_at: new Date().toISOString(),
       })
       .eq("id", siteId);
 
@@ -85,6 +76,7 @@ export async function POST(
     return jsonErr(e?.message || "Publish failed", 500);
   }
 }
+
 
 
 
