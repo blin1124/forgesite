@@ -5,11 +5,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function jsonError(message: string, status = 400) {
-  const res = NextResponse.json({ ok: false, error: message }, { status });
-  res.headers.set("cache-control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-  res.headers.set("pragma", "no-cache");
-  res.headers.set("expires", "0");
-  return res;
+  return NextResponse.json({ ok: false, error: message }, { status });
 }
 
 function noStore(res: NextResponse) {
@@ -21,31 +17,32 @@ function noStore(res: NextResponse) {
 
 export async function GET(_req: Request, { params }: { params: { siteId: string } }) {
   try {
-    const admin = getSupabaseAdmin();
-
     const siteId = String(params?.siteId || "").trim();
     if (!siteId) return jsonError("Missing siteId", 400);
 
-    // ✅ id is unique — fetch the row directly
-    const { data: row, error } = await admin
+    const admin = getSupabaseAdmin();
+
+    // IMPORTANT: read PUBLISHED HTML (not draft html)
+    const { data, error } = await admin
       .from("sites")
       .select("id, published_html, published_at, updated_at, created_at")
       .eq("id", siteId)
-      .single();
+      .limit(1)
+      .maybeSingle();
 
     if (error) return jsonError(error.message, 500);
-    if (!row) return jsonError("Not found", 404);
+    if (!data) return jsonError("Not found", 404);
 
-    const html = String(row.published_html || "").trim();
+    const publishedHtml = String(data.published_html || "").trim();
 
     const res = NextResponse.json({
       ok: true,
-      id: row.id,
-      published: Boolean(html),
-      html: html || "",
-      published_at: row.published_at || null,
-      updated_at: row.updated_at || null,
-      created_at: row.created_at || null,
+      id: data.id,
+      published: Boolean(publishedHtml),
+      html: publishedHtml, // <-- what /s/<id> expects
+      published_at: data.published_at ?? null,
+      updated_at: data.updated_at ?? null,
+      created_at: data.created_at ?? null,
     });
 
     return noStore(res);
