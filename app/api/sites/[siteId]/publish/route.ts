@@ -10,77 +10,38 @@ function jsonErr(message: string, status = 400) {
 }
 
 function noStore(res: NextResponse) {
-  res.headers.set("cache-control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.headers.set("cache-control", "no-store, no-cache, must-revalidate");
   res.headers.set("pragma", "no-cache");
   res.headers.set("expires", "0");
   return res;
 }
 
-export async function POST(req: Request, { params }: { params: { siteId: string } }) {
+export async function POST(
+  req: Request,
+  { params }: { params: { siteId: string } }
+) {
   try {
-    const siteId = String(params?.siteId || "").trim();
-    if (!siteId) return jsonErr("Missing siteId", 400);
+    const siteId = String(params.siteId || "").trim();
+    if (!siteId) return jsonErr("Missing siteId");
 
     const auth = req.headers.get("authorization") || "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
     if (!token) return jsonErr("Missing auth token", 401);
 
-    // Verify user from token (so only owner can publish)
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const userClient = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
-      auth: { persistSession: false },
-    });
-
-    const { data: userRes, error: userErr } = await userClient.auth.getUser();
-    if (userErr || !userRes?.user) return jsonErr("Unauthorized", 401);
-
-    const userId = userRes.user.id;
-    const admin = getSupabaseAdmin();
-
-    // IMPORTANT: support both modern + legacy columns
-    const { data: site, error: siteErr } = await admin
-      .from("sites")
-      .select("id, user_id, html, content")
-      .eq("id", siteId)
-      .maybeSingle();
-
-    if (siteErr) return jsonErr(siteErr.message, 500);
-    if (!site) return jsonErr("Site not found", 404);
-    if (String(site.user_id) !== String(userId)) return jsonErr("Forbidden", 403);
-
-    // Prefer html, fallback to content if your save route used that
-    const draftHtml = String(site.html || "").trim() || String(site.content || "").trim();
-    if (!draftHtml) return jsonErr("Site draft is empty (Save first)", 400);
-
-    const now = new Date().toISOString();
-
-    // Write published_html AND published_at together
-    const { error: upErr } = await admin
-      .from("sites")
-      .update({
-        published_html: draftHtml,
-        published_at: now,
-        updated_at: now,
-      })
-      .eq("id", siteId);
-
-    if (upErr) return jsonErr(upErr.message, 500);
-
-    return noStore(
-      NextResponse.json({
-        ok: true,
-        siteId,
-        published: true,
-        bytes: draftHtml.length,
-        published_at: now,
-      })
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        global: {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+        auth: { persistSession: false },
+      }
     );
-  } catch (e: any) {
-    return jsonErr(e?.message || "Publish failed", 500);
-  }
-}
+
+    const { data: userRes } = await supabase.auth.getUser();
+    const user = userRes?.user;
+    if (!user) return jsonErr("Unauthorized", 401);
 
 
 
