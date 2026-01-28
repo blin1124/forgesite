@@ -5,96 +5,79 @@ import { getSupabaseAdmin } from "@/lib/supabase/admin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function jsonErr(message: string, status: number = 400) {
+function jsonErr(message: string, status = 400) {
   return NextResponse.json({ ok: false, error: message }, { status });
 }
 
 function noStore(res: NextResponse) {
-  res.headers.set("cache-control", "no-store, no-cache, must-revalidate");
+  res.headers.set("cache-control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.headers.set("pragma", "no-cache");
   res.headers.set("expires", "0");
   return res;
 }
 
-export async function POST(req: Request, ctx: { params: { siteId: string } }) {
+export async function POST(req: Request, { params }: { params: { siteId: string } }) {
   try {
-    const siteId = String(ctx?.params?.siteId || "").trim();
-    if (!siteId) {
-      return jsonErr("Missing siteId", 400);
-    }
+    const siteId = String(params?.siteId || "").trim();
+    if (!siteId) return jsonErr("Missing siteId", 400);
 
     const auth = req.headers.get("authorization") || "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-    if (!token) {
-      return jsonErr("Missing auth token", 401);
-    }
+    if (!token) return jsonErr("Missing auth token", 401);
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
     if (!supabaseUrl || !anonKey) {
-      return jsonErr("Missing Supabase env vars", 500);
+      return jsonErr("Server missing Supabase env vars", 500);
     }
 
+    // User-scoped client (verifies caller)
     const userClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: `Bearer ${token}` } },
       auth: { persistSession: false },
     });
 
-    const userResp = await userClient.auth.getUser();
-    const user = userResp?.data?.user || null;
-    if (!user) {
-      return jsonErr("Unauthorized", 401);
-    }
+    const { data: userRes, error: userErr } = await userClient.auth.getUser();
+    if (userErr || !userRes?.user) return jsonErr("Unauthorized", 401);
 
+    const userId = userRes.user.id;
     const admin = getSupabaseAdmin();
 
-    // ✅ ALWAYS FETCH MOST RECENT DRAFT
-    const draftResp = await admin
+    // Read the draft html + owner
+    const { data: site, error: siteErr } = await admin
       .from("sites")
-      .select("id, user_id, html, updated_at")
+      .select("id, user_id, html")
       .eq("id", siteId)
-      .order("updated_at", { ascending: false })
-      .limit(1);
+      .maybeSingle();
 
-    if (draftResp.error) {
-      return jsonErr(draftResp.error.message, 500);
-    }
+    if (siteErr) return jsonErr(siteErr.message, 500);
+    if (!site) return jsonErr("Site not found", 404);
+    if (String(site.user_id) !== String(userId)) return jsonErr("Forbidden", 403);
 
-    const site = (draftResp.data && draftResp.data[0]) ? draftResp.data[0] : null;
-    if (!site) {
-      return jsonErr("Site not found", 404);
-    }
-
-    if (String(site.user_id) !== String(user.id)) {
-      return jsonErr("Forbidden", 403);
-    }
-
-    const html = String(site.html || "").trim();
-    if (!html) {
-      return jsonErr("Draft HTML is empty", 400);
-    }
+    const latestHtml = String(site.html || "").trim();
+    if (!latestHtml) return jsonErr("Site html is empty. Generate + Save first.", 400);
 
     const now = new Date().toISOString();
 
-    const upResp = await admin
+    // Publish draft -> published_html
+    const { error: upErr } = await admin
       .from("sites")
       .update({
-        published_html: html,
+        published_html: latestHtml,
         published_at: now,
-        content: "published",
+        content: "published", // optional but useful if you rely on it
       })
       .eq("id", siteId);
 
-    if (upResp.error) {
-      return jsonErr(upResp.error.message, 500);
-    }
+    if (upErr) return jsonErr(upErr.message, 500);
 
     return noStore(
       NextResponse.json({
         ok: true,
         siteId,
         published: true,
-        bytes: html.length,
+        bytes: latestHtml.length,
         published_at: now,
       })
     );
