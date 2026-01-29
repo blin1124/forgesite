@@ -170,6 +170,11 @@ export default function BuilderClient() {
 
       await refreshSites();
 
+      // ✅ Step C: after save, re-load the saved record so View/Publish stay in sync
+      if (newId) {
+        setTimeout(() => loadSite(newId), 0);
+      }
+
       if (!opts?.silent) {
         setBusy("Saved ✅");
         setTimeout(() => setBusy(""), 1200);
@@ -333,7 +338,7 @@ export default function BuilderClient() {
       const openUrl = await getLiveUrlForSite(siteId);
 
       setBusy("Published ✅ Opening live site…");
-      // ✅ Fix C: bust cache on open
+      // ✅ bust cache on open
       window.open(withBust(openUrl), "_blank", "noopener,noreferrer");
 
       setTimeout(() => setBusy(""), 1200);
@@ -394,7 +399,7 @@ export default function BuilderClient() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
                 <div style={{ fontSize: 18, fontWeight: 900 }}>My Sites</div>
-                <div style={{ opacity: 0.85, fontSize: 13 }}>{sites.length} site(s)</div>
+                <div style={{ opacity: 0.85, font�Size: 13 }}>{sites.length} site(s)</div>
               </div>
               <button
                 style={smallBtn}
@@ -449,9 +454,18 @@ export default function BuilderClient() {
                         Domain
                       </button>
 
+                      {/* ✅ Step B: View draft when currently selected, else view published */}
                       <button
                         style={secondaryBtn}
                         onClick={() => {
+                          if (selectedId === s.id && html.trim()) {
+                            const blob = new Blob([html], { type: "text/html" });
+                            const url = URL.createObjectURL(blob);
+                            window.open(url, "_blank", "noopener,noreferrer");
+                            setTimeout(() => URL.revokeObjectURL(url), 30_000);
+                            return;
+                          }
+
                           const url = withBust(`/s/${encodeURIComponent(s.id)}`);
                           window.open(url, "_blank", "noopener,noreferrer");
                         }}
@@ -483,6 +497,11 @@ export default function BuilderClient() {
           <section style={card}>
             <div style={{ fontSize: 18, fontWeight: 900 }}>
               Website Prompt {isDirty ? <span style={{ opacity: 0.85 }}>(unsaved)</span> : null}
+            </div>
+
+            {/* ✅ Step A: show selected site id */}
+            <div style={{ fontSize: 12, opacity: 0.85, marginTop: 6 }}>
+              Selected siteId: <b>{selectedId || "(none)"}</b> {isDirty ? " • unsaved" : ""}
             </div>
 
             <textarea
@@ -712,5 +731,6 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
 
 
