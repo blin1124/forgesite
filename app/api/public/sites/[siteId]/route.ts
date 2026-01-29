@@ -19,10 +19,10 @@ export async function GET(_: Request, { params }: { params: { siteId: string } }
 
   const admin = getSupabaseAdmin();
 
-  // ✅ IMPORTANT: read published_html (not html)
+  // ✅ IMPORTANT: return PUBLISHED html only
   const { data, error } = await admin
     .from("sites")
-    .select("published_html, published_at")
+    .select("id, published_html, published_at")
     .eq("id", siteId)
     .maybeSingle();
 
@@ -31,16 +31,28 @@ export async function GET(_: Request, { params }: { params: { siteId: string } }
   }
 
   const html = String(data?.published_html || "").trim();
+
+  // Not published yet
   if (!html) {
-    return noStore(NextResponse.json({ ok: true, html: "" }, { status: 200 }));
+    return noStore(
+      NextResponse.json(
+        { ok: true, siteId, published: false, html: null, published_at: data?.published_at ?? null },
+        { status: 200 }
+      )
+    );
   }
 
   return noStore(
-    NextResponse.json({
-      ok: true,
-      html,
-      published_at: data?.published_at || null,
-    })
+    NextResponse.json(
+      {
+        ok: true,
+        siteId,
+        published: true,
+        html,
+        published_at: data?.published_at ?? null,
+      },
+      { status: 200 }
+    )
   );
 }
 
