@@ -137,6 +137,7 @@ export default function BuilderClient() {
     }
   }
 
+  // ✅ UPDATED: Save now sends Bearer token (required by your /api/sites/save route)
   async function saveSite(opts?: { silent?: boolean }) {
     if (!opts?.silent) {
       setBusy("");
@@ -147,11 +148,24 @@ export default function BuilderClient() {
     if (!html.trim()) return setBusy("HTML is empty. Generate first.");
 
     try {
+      // Get session token
+      const supabase = createSupabaseBrowserClient();
+      const { data: sessionRes } = await supabase.auth.getSession();
+      const token = sessionRes?.session?.access_token;
+
+      if (!token) {
+        router.replace("/login?next=/builder");
+        return;
+      }
+
       if (!opts?.silent) setBusy("Saving…");
 
       const res = await fetch("/api/sites/save", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           id: selectedId,
           template: "html",
@@ -604,9 +618,7 @@ export default function BuilderClient() {
               ref={iframeRef}
               title="preview"
               style={{ width: "100%", height: "78vh", background: "white" }}
-              srcDoc={
-                html || "<html><body style='font-family:system-ui;padding:40px'>Generate HTML to preview.</body></html>"
-              }
+              srcDoc={html || "<html><body style='font-family:system-ui;padding:40px'>Generate HTML to preview.</body></html>"}
               sandbox="allow-same-origin"
             />
           </div>
@@ -713,6 +725,8 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
+
 
 
 
