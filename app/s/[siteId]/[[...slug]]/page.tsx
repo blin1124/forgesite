@@ -1,4 +1,5 @@
 import { headers } from "next/headers";
+import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -15,57 +16,61 @@ function normalizePath(slug?: string[]) {
   return "/" + slug.join("/");
 }
 
-function getBaseUrl() {
+function getHostDebug() {
   const h = headers();
-
-  const host =
-    h.get("x-forwarded-host") ||
-    h.get("host");
-
-  const proto =
-    h.get("x-forwarded-proto") || "https";
-
-  if (host) return `${proto}://${host}`;
-
-  // absolute fallback
-  if (process.env.NEXT_PUBLIC_SITE_URL) {
-    return process.env.NEXT_PUBLIC_SITE_URL;
-  }
-
-  return null;
+  return {
+    host: h.get("host") || "",
+    xfHost: h.get("x-forwarded-host") || "",
+    xfProto: h.get("x-forwarded-proto") || "",
+  };
 }
 
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  // ✅ Service role so this works for customer domains (no auth cookies, no RLS issues)
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
+
 async function fetchPublishedHtml(siteId: string) {
-  const base = getBaseUrl();
-  if (!base) return null;
+  // ✅ IMPORTANT: Prefer published_html
+  // If you don't have published_html yet, either:
+  //  - add it, OR
+  //  - change this to select("html")
+  const { data, error } = await supabase
+    .from("sites")
+    .select("published_html, html")
+    .eq("id", siteId)
+    .maybeSingle();
 
-  const url =
-    `${base}/api/public/sites/${encodeURIComponent(siteId)}?v=${Date.now()}`;
+  if (error) return null;
 
-  const res = await fetch(url, {
-    cache: "no-store",
-    headers: {
-      "cache-control": "no-store, no-cache, must-revalidate",
-      pragma: "no-cache",
-    },
-  });
+  // 1) prefer published_html
+  const published = String((data as any)?.published_html || "").trim();
+  if (published) return published;
 
-  if (!res.ok) return null;
-
-  const json = await res.json();
-
-  const html = String(json?.html || "").trim();
-
-  return html || null;
+  // 2) optional fallback to html (draft)
+  // If you want STRICT publish-only behavior, delete this fallback.
+  const draft = String((data as any)?.html || "").trim();
+  return draft || null;
 }
 
 export default async function SitePage({ params }: PageProps) {
   const siteId = String(params.siteId || "").trim();
   const path = normalizePath(params.slug);
 
+  if (!siteId) {
+    return (
+      <main style={{ padding: 40, fontFamily: "system-ui" }}>
+        <h1>Missing siteId</h1>
+      </main>
+    );
+  }
+
   const html = await fetchPublishedHtml(siteId);
 
   if (!html) {
+    const dbg = getHostDebug();
+
     return (
       <main style={{ padding: 40, fontFamily: "system-ui" }}>
         <h1>Site not published yet</h1>
@@ -82,16 +87,17 @@ export default async function SitePage({ params }: PageProps) {
         >
 siteId: {siteId}
 path: {path}
+
+host: {dbg.host}
+x-forwarded-host: {dbg.xfHost}
+x-forwarded-proto: {dbg.xfProto}
         </pre>
       </main>
     );
   }
 
   return (
-    <div
-      suppressHydrationWarning
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <div suppressHydrationWarning dangerouslySetInnerHTML={{ __html: html }} />
   );
 }
 
