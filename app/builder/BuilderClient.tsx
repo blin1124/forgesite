@@ -58,16 +58,10 @@ export default function BuilderClient() {
 
   const canUseAI = useMemo(() => apiKey.trim().startsWith("sk-"), [apiKey]);
 
+  // ✅ Fix C helper: force fresh loads when opening live URLs
   function withBust(url: string) {
     const bust = `v=${Date.now()}`;
     return url.includes("?") ? `${url}&${bust}` : `${url}?${bust}`;
-  }
-
-  // ✅ Canonicalize domains: always open apex (strip www.)
-  function canonicalDomain(d: string) {
-    const domain = String(d || "").trim().toLowerCase();
-    if (!domain) return "";
-    return domain.replace(/^www\./, "");
   }
 
   useEffect(() => {
@@ -278,7 +272,7 @@ export default function BuilderClient() {
   }
 
   // Resolve live URL:
-  // - verified domain => https://(apex domain)
+  // - verified domain => https://domain
   // - else fallback => /s/{siteId}
   async function getLiveUrlForSite(siteId: string) {
     let openUrl = `/s/${encodeURIComponent(siteId)}`;
@@ -287,11 +281,8 @@ export default function BuilderClient() {
       const dres = await fetch(`/api/sites/${encodeURIComponent(siteId)}/domain`, { cache: "no-store" });
       const { json: djson } = await readResponse(dres);
 
-      const domainRaw = String(djson?.domain || "").trim();
+      const domain = String(djson?.domain || "").trim();
       const status = String(djson?.status || "").toLowerCase();
-
-      // ✅ Always canonicalize to apex
-      const domain = canonicalDomain(domainRaw);
 
       if (domain && status === "verified") openUrl = `https://${domain}`;
     } catch {
@@ -302,6 +293,7 @@ export default function BuilderClient() {
   }
 
   // Publish:
+  // ✅ If publishing the currently-selected site AND we have local unsaved edits, save first.
   async function publishSite(siteId: string) {
     setBusy("");
     setDebug("");
@@ -317,7 +309,7 @@ export default function BuilderClient() {
         return;
       }
 
-      // ✅ Save latest changes before publish (only possible for currently-loaded site)
+      // ✅ Critical: Save latest changes before publish (so published_html gets newest html)
       if (siteId === selectedId && isDirty) {
         setBusy("Saving latest changes before publish…");
         await saveSite({ silent: true });
@@ -338,10 +330,10 @@ export default function BuilderClient() {
 
       await refreshSites();
 
-      // ✅ Always open canonical (apex) live URL
       const openUrl = await getLiveUrlForSite(siteId);
 
       setBusy("Published ✅ Opening live site…");
+      // ✅ Fix C: bust cache on open
       window.open(withBust(openUrl), "_blank", "noopener,noreferrer");
 
       setTimeout(() => setBusy(""), 1200);
@@ -611,7 +603,9 @@ export default function BuilderClient() {
               ref={iframeRef}
               title="preview"
               style={{ width: "100%", height: "78vh", background: "white" }}
-              srcDoc={html || "<html><body style='font-family:system-ui;padding:40px'>Generate HTML to preview.</body></html>"}
+              srcDoc={
+                html || "<html><body style='font-family:system-ui;padding:40px'>Generate HTML to preview.</body></html>"
+              }
               sandbox="allow-same-origin"
             />
           </div>
@@ -718,4 +712,5 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
 
