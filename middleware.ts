@@ -39,7 +39,10 @@ function isBypassPath(pathname: string) {
     pathname.startsWith("/account") ||
     pathname.startsWith("/settings") ||
     pathname.startsWith("/_hosted") ||
-    pathname.startsWith("/privacy")
+    pathname.startsWith("/privacy") ||
+    pathname.startsWith("/favicon") ||
+    pathname.startsWith("/robots.txt") ||
+    pathname.startsWith("/sitemap.xml")
   );
 }
 
@@ -70,11 +73,11 @@ export async function middleware(req: NextRequest) {
   // If missing, don’t break the app
   if (!supabaseUrl || !serviceKey) return NextResponse.next();
 
-  // Lookup: custom_domains.domain == host
-  // NOTE: do NOT encode the whole filter value; only ensure host is clean
+  // Lookup: custom_domains.domain == host (apex only)
+  // Pull verified bool AND status to support either approach
   const lookupUrl =
     `${supabaseUrl}/rest/v1/custom_domains` +
-    `?select=site_id,status,domain` +
+    `?select=site_id,status,verified,domain` +
     `&domain=eq.${host}` +
     `&limit=1`;
 
@@ -92,6 +95,7 @@ export async function middleware(req: NextRequest) {
     const rows = (await r.json()) as Array<{
       site_id: string | null;
       status?: string | null;
+      verified?: boolean | null;
       domain?: string | null;
     }>;
 
@@ -100,17 +104,23 @@ export async function middleware(req: NextRequest) {
     // Must be connected to a site
     if (!row?.site_id) return NextResponse.next();
 
-    // Optional: only route verified domains
-    // If you want this strict behavior, uncomment:
-    // const st = String(row.status || "").toLowerCase();
-    // if (st !== "verified") return NextResponse.next();
+    // ✅ STRICT: only route verified domains
+    // Your table appears to have BOTH:
+    // - verified (boolean)
+    // - status ("verified")
+    const status = String(row.status || "").toLowerCase();
+    const isVerified = row.verified === true || status === "verified";
+    if (!isVerified) return NextResponse.next();
 
-    // Rewrite customer domain -> /s/{site_id}{pathname}
+    // ✅ Rewrite customer domain -> /s/{site_id}{pathname} (and KEEP query string)
     const rewriteUrl = req.nextUrl.clone();
-    rewriteUrl.pathname = `/s/${row.site_id}${pathname}`;
+    rewriteUrl.pathname = `/s/${encodeURIComponent(row.site_id)}${pathname}`;
+    rewriteUrl.search = url.search; // keep ?v=... or any query params
+
     return NextResponse.rewrite(rewriteUrl);
   } catch {
     return NextResponse.next();
   }
 }
+
 
