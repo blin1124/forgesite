@@ -58,6 +58,12 @@ export default function BuilderClient() {
 
   const canUseAI = useMemo(() => apiKey.trim().startsWith("sk-"), [apiKey]);
 
+  // ✅ Fix C helper: force fresh loads when opening live URLs
+  function withBust(url: string) {
+    const bust = `v=${Date.now()}`;
+    return url.includes("?") ? `${url}&${bust}` : `${url}?${bust}`;
+  }
+
   useEffect(() => {
     const run = async () => {
       try {
@@ -278,9 +284,7 @@ export default function BuilderClient() {
       const domain = String(djson?.domain || "").trim();
       const status = String(djson?.status || "").toLowerCase();
 
-      if (domain && status === "verified") {
-        openUrl = `https://${domain}`;
-      }
+      if (domain && status === "verified") openUrl = `https://${domain}`;
     } catch {
       // ignore
     }
@@ -289,8 +293,7 @@ export default function BuilderClient() {
   }
 
   // Publish:
-  // IMPORTANT: If you're publishing the currently selected site AND you have local edits,
-  // auto-save first so DB html is current before publish copies to published_html.
+  // ✅ If publishing the currently-selected site AND we have local unsaved edits, save first.
   async function publishSite(siteId: string) {
     setBusy("");
     setDebug("");
@@ -306,7 +309,7 @@ export default function BuilderClient() {
         return;
       }
 
-      // ✅ Auto-save local edits for the selected site before publishing
+      // ✅ Critical: Save latest changes before publish (so published_html gets newest html)
       if (siteId === selectedId && isDirty) {
         setBusy("Saving latest changes before publish…");
         await saveSite({ silent: true });
@@ -330,7 +333,9 @@ export default function BuilderClient() {
       const openUrl = await getLiveUrlForSite(siteId);
 
       setBusy("Published ✅ Opening live site…");
-      window.open(openUrl, "_blank", "noopener,noreferrer");
+
+      // ✅ Fix C: bust cache on open
+      window.open(withBust(openUrl), "_blank", "noopener,noreferrer");
 
       setTimeout(() => setBusy(""), 1200);
     } catch (e: any) {
@@ -445,12 +450,12 @@ export default function BuilderClient() {
                         Domain
                       </button>
 
-                      {/* View */}
                       <button
                         style={secondaryBtn}
-                        onClick={() =>
-                          window.open(`/s/${encodeURIComponent(s.id)}`, "_blank", "noopener,noreferrer")
-                        }
+                        onClick={() => {
+                          const url = withBust(`/s/${encodeURIComponent(s.id)}`);
+                          window.open(url, "_blank", "noopener,noreferrer");
+                        }}
                         disabled={isBusy}
                       >
                         View
@@ -480,6 +485,7 @@ export default function BuilderClient() {
             <div style={{ fontSize: 18, fontWeight: 900 }}>
               Website Prompt {isDirty ? <span style={{ opacity: 0.85 }}>(unsaved)</span> : null}
             </div>
+
             <textarea
               value={prompt}
               onChange={(e) => {
@@ -584,7 +590,7 @@ export default function BuilderClient() {
         {/* RIGHT */}
         <section style={card}>
           <div style={{ fontSize: 18, fontWeight: 900 }}>Live Preview</div>
-          <div style={{ marginTop: 10, borderRadius: 14, overflow: "hidden", border:
+
           <div
             style={{
               marginTop: 10,
@@ -598,7 +604,9 @@ export default function BuilderClient() {
               ref={iframeRef}
               title="preview"
               style={{ width: "100%", height: "78vh", background: "white" }}
-              srcDoc={html || "<html><body style='font-family:system-ui;padding:40px'>Generate HTML to preview.</body></html>"}
+              srcDoc={
+                html || "<html><body style='font-family:system-ui;padding:40px'>Generate HTML to preview.</body></html>"
+              }
               sandbox="allow-same-origin"
             />
           </div>
@@ -705,6 +713,7 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
 
 
 
