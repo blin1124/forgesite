@@ -58,43 +58,26 @@ export default function BuilderClient() {
 
   const canUseAI = useMemo(() => apiKey.trim().startsWith("sk-"), [apiKey]);
 
-  // ✅ Force fresh loads when opening live URLs
+  // Force fresh loads when opening live URLs
   function withBust(url: string) {
     const bust = `v=${Date.now()}`;
     return url.includes("?") ? `${url}&${bust}` : `${url}?${bust}`;
   }
 
-  // ✅ Canonicalize domains: ALWAYS open apex (strip leading www.)
-  function canonicalizeDomain(d: string) {
-    return String(d || "")
-      .trim()
-      .toLowerCase()
-      .replace(/\.$/, "")
-      .replace(/^www\./, "");
-  }
-
-  // ✅ Canonicalize full URL if it’s https://{domain}
-  function canonicalizeUrl(url: string) {
-    if (!url) return url;
-    if (!url.startsWith("http")) return url; // keep /s/{id} fallback as-is
-    try {
-      const u = new URL(url);
-      u.hostname = canonicalizeDomain(u.hostname);
-      return u.toString();
-    } catch {
-      return url.replace(/^https:\/\/www\./i, "https://");
-    }
-  }
-
-  // ✅ Domain button fix: send BOTH params so /domain works regardless of which it expects
+  /**
+   * ✅ FIX: Always navigate to /domain with the *correct* query param name: siteId
+   * - no "siteid"
+   * - no duplicates
+   */
   function goToDomain(siteId?: string | null) {
     const id = String(siteId || selectedId || "").trim();
     if (!id) {
-      router.push("/domain");
+      setBusy("Select a site first, then click Domain.");
       return;
     }
-    const q = encodeURIComponent(id);
-    router.push(`/domain?siteId=${q}&siteid=${q}`);
+    const qs = new URLSearchParams();
+    qs.set("siteId", id); // MUST be siteId (capital I)
+    router.push(`/domain?${qs.toString()}`);
   }
 
   useEffect(() => {
@@ -304,33 +287,6 @@ export default function BuilderClient() {
     }
   }
 
-  // Resolve live URL:
-  // - verified domain => https://apex-domain   (strip www)
-  // - else fallback => /s/{siteId}
-  async function getLiveUrlForSite(siteId: string) {
-    let openUrl = `/s/${encodeURIComponent(siteId)}`;
-
-    try {
-      const dres = await fetch(`/api/sites/${encodeURIComponent(siteId)}/domain`, { cache: "no-store" });
-      const { json: djson } = await readResponse(dres);
-
-      const domainRaw = String(djson?.domain || "").trim();
-      const status = String(djson?.status || "").toLowerCase();
-
-      if (domainRaw && status === "verified") {
-        const apex = canonicalizeDomain(domainRaw);
-        openUrl = `https://${apex}`;
-      }
-    } catch {
-      // ignore
-    }
-
-    return openUrl;
-  }
-
-  // Publish:
-  // ✅ Save latest changes before publish
-  // ✅ Always redirect to apex (non-www) and use same-tab redirect
   async function publishSite(siteId: string) {
     setBusy("");
     setDebug("");
@@ -346,7 +302,7 @@ export default function BuilderClient() {
         return;
       }
 
-      // ✅ Save latest changes before publish (so published_html gets newest html)
+      // Save latest changes before publish
       if (siteId === selectedId && isDirty) {
         setBusy("Saving latest changes before publish…");
         await saveSite({ silent: true });
@@ -367,11 +323,11 @@ export default function BuilderClient() {
 
       await refreshSites();
 
-      let openUrl = await getLiveUrlForSite(siteId);
-      openUrl = canonicalizeUrl(openUrl);
-
-      setBusy("Published ✅ Opening live site…");
-      window.location.href = withBust(openUrl);
+      // keep your old behavior for now (publish debugging comes after domain button works)
+      const url = withBust(`/s/${encodeURIComponent(siteId)}`);
+      window.open(url, "_blank", "noopener,noreferrer");
+      setBusy("Published ✅");
+      setTimeout(() => setBusy(""), 1200);
     } catch (e: any) {
       setBusy(e?.message || "Publish failed");
       setDebug(String(e?.stack || ""));
@@ -476,6 +432,7 @@ export default function BuilderClient() {
                         {isBusy ? "Publishing…" : "Publish"}
                       </button>
 
+                      {/* ✅ FIXED: Domain always uses siteId param (correct case) */}
                       <button style={secondaryBtn} onClick={() => goToDomain(s.id)} disabled={isBusy}>
                         Domain
                       </button>
@@ -610,6 +567,7 @@ export default function BuilderClient() {
                 Send
               </button>
 
+              {/* ✅ FIXED: Connect Domain goes to the selected site (and uses siteId) */}
               <button style={secondaryBtn} onClick={() => goToDomain(selectedId)}>
                 Connect Domain
               </button>
@@ -741,6 +699,7 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
 
 
 
