@@ -58,28 +58,6 @@ export default function BuilderClient() {
 
   const canUseAI = useMemo(() => apiKey.trim().startsWith("sk-"), [apiKey]);
 
-  // Force fresh loads when opening live URLs
-  function withBust(url: string) {
-    const bust = `v=${Date.now()}`;
-    return url.includes("?") ? `${url}&${bust}` : `${url}?${bust}`;
-  }
-
-  /**
-   * ✅ FIX: Always navigate to /domain with the *correct* query param name: siteId
-   * - no "siteid"
-   * - no duplicates
-   */
-  function goToDomain(siteId?: string | null) {
-    const id = String(siteId || selectedId || "").trim();
-    if (!id) {
-      setBusy("Select a site first, then click Domain.");
-      return;
-    }
-    const qs = new URLSearchParams();
-    qs.set("siteId", id); // MUST be siteId (capital I)
-    router.push(`/domain?${qs.toString()}`);
-  }
-
   useEffect(() => {
     const run = async () => {
       try {
@@ -287,6 +265,32 @@ export default function BuilderClient() {
     }
   }
 
+  // Resolve live URL:
+  // - verified domain => https://domain
+  // - else fallback => /s/{siteId}
+  async function getLiveUrlForSite(siteId: string) {
+    let openUrl = `/s/${encodeURIComponent(siteId)}`;
+
+    try {
+      const dres = await fetch(`/api/sites/${encodeURIComponent(siteId)}/domain`, { cache: "no-store" });
+      const { json: djson } = await readResponse(dres);
+
+      const domain = String(djson?.domain || "").trim();
+      const status = String(djson?.status || "").toLowerCase();
+
+      if (domain && status === "verified") {
+        openUrl = `https://${domain}`;
+      }
+    } catch {
+      // ignore
+    }
+
+    return openUrl;
+  }
+
+  // Publish:
+  // IMPORTANT: If you're publishing the currently selected site AND you have local edits,
+  // auto-save first so DB html is current before publish copies to published_html.
   async function publishSite(siteId: string) {
     setBusy("");
     setDebug("");
@@ -302,7 +306,7 @@ export default function BuilderClient() {
         return;
       }
 
-      // Save latest changes before publish
+      // ✅ Auto-save local edits for the selected site before publishing
       if (siteId === selectedId && isDirty) {
         setBusy("Saving latest changes before publish…");
         await saveSite({ silent: true });
@@ -323,10 +327,11 @@ export default function BuilderClient() {
 
       await refreshSites();
 
-      // keep your old behavior for now (publish debugging comes after domain button works)
-      const url = withBust(`/s/${encodeURIComponent(siteId)}`);
-      window.open(url, "_blank", "noopener,noreferrer");
-      setBusy("Published ✅");
+      const openUrl = await getLiveUrlForSite(siteId);
+
+      setBusy("Published ✅ Opening live site…");
+      window.open(openUrl, "_blank", "noopener,noreferrer");
+
       setTimeout(() => setBusy(""), 1200);
     } catch (e: any) {
       setBusy(e?.message || "Publish failed");
@@ -432,17 +437,20 @@ export default function BuilderClient() {
                         {isBusy ? "Publishing…" : "Publish"}
                       </button>
 
-                      {/* ✅ FIXED: Domain always uses siteId param (correct case) */}
-                      <button style={secondaryBtn} onClick={() => goToDomain(s.id)} disabled={isBusy}>
+                      <button
+                        style={secondaryBtn}
+                        onClick={() => router.push(`/domain?siteId=${encodeURIComponent(s.id)}`)}
+                        disabled={isBusy}
+                      >
                         Domain
                       </button>
 
+                      {/* View */}
                       <button
                         style={secondaryBtn}
-                        onClick={() => {
-                          const url = withBust(`/s/${encodeURIComponent(s.id)}`);
-                          window.open(url, "_blank", "noopener,noreferrer");
-                        }}
+                        onClick={() =>
+                          window.open(`/s/${encodeURIComponent(s.id)}`, "_blank", "noopener,noreferrer")
+                        }
                         disabled={isBusy}
                       >
                         View
@@ -472,7 +480,6 @@ export default function BuilderClient() {
             <div style={{ fontSize: 18, fontWeight: 900 }}>
               Website Prompt {isDirty ? <span style={{ opacity: 0.85 }}>(unsaved)</span> : null}
             </div>
-
             <textarea
               value={prompt}
               onChange={(e) => {
@@ -567,8 +574,7 @@ export default function BuilderClient() {
                 Send
               </button>
 
-              {/* ✅ FIXED: Connect Domain goes to the selected site (and uses siteId) */}
-              <button style={secondaryBtn} onClick={() => goToDomain(selectedId)}>
+              <button style={secondaryBtn} onClick={() => router.push("/domain")}>
                 Connect Domain
               </button>
             </div>
@@ -578,7 +584,7 @@ export default function BuilderClient() {
         {/* RIGHT */}
         <section style={card}>
           <div style={{ fontSize: 18, fontWeight: 900 }}>Live Preview</div>
-
+          <div style={{ marginTop: 10, borderRadius: 14, overflow: "hidden", border:
           <div
             style={{
               marginTop: 10,
