@@ -1,13 +1,12 @@
-"use client";
+// app/domain/page.tsx
+export const dynamic = "force-dynamic";
 
-import { useSearchParams, useRouter } from "next/navigation";
-import React from "react";
-
-export default function DomainPage() {
-  const sp = useSearchParams();
-  const router = useRouter();
-
-  const siteId = sp.get("siteId") || "";
+export default function DomainPage({
+  searchParams,
+}: {
+  searchParams?: { siteId?: string };
+}) {
+  const siteId = String(searchParams?.siteId || "").trim();
 
   return (
     <main style={{ padding: 24 }}>
@@ -15,13 +14,26 @@ export default function DomainPage() {
 
       {!siteId ? (
         <>
-          <p style={{ marginTop: 12 }}>Missing <code>siteId</code> in URL.</p>
-          <button
-            style={{ marginTop: 16, padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}
-            onClick={() => router.push("/builder")}
+          <p style={{ marginTop: 12 }}>
+            Missing <code>siteId</code> in the URL.
+          </p>
+          <p style={{ marginTop: 8, opacity: 0.8 }}>
+            Go back to the Builder and click the Domain button for a site.
+          </p>
+
+          <a
+            href="/builder"
+            style={{
+              display: "inline-block",
+              marginTop: 16,
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid rgba(0,0,0,0.15)",
+              textDecoration: "none",
+            }}
           >
             Back to Builder
-          </button>
+          </a>
         </>
       ) : (
         <>
@@ -29,13 +41,15 @@ export default function DomainPage() {
             Site ID: <code>{siteId}</code>
           </p>
           <p style={{ marginTop: 8, opacity: 0.8 }}>
-            (This is the correct page for your Builder “Domain” button. Next we wire your actual domain linking UI here.)
+            This confirms the Domain button routing is fixed.
+            Next we wire the actual domain linking UI here.
           </p>
         </>
       )}
     </main>
   );
 }
+
 
 
 
