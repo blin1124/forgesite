@@ -58,33 +58,16 @@ export default function BuilderClient() {
 
   const canUseAI = useMemo(() => apiKey.trim().startsWith("sk-"), [apiKey]);
 
-  // ✅ Fix C helper: force fresh loads when opening live URLs
   function withBust(url: string) {
     const bust = `v=${Date.now()}`;
     return url.includes("?") ? `${url}&${bust}` : `${url}?${bust}`;
   }
 
-  // ✅ Canonicalize domains: ALWAYS open apex (strip leading www.)
-  function canonicalizeDomain(d: string) {
-    return String(d || "")
-      .trim()
-      .toLowerCase()
-      .replace(/\.$/, "")
-      .replace(/^www\./, "");
-  }
-
-  // ✅ Canonicalize full URL if it’s https://{domain}
-  function canonicalizeUrl(url: string) {
-    if (!url) return url;
-    if (!url.startsWith("http")) return url; // keep /s/{id} fallback as-is
-    try {
-      const u = new URL(url);
-      u.hostname = canonicalizeDomain(u.hostname);
-      return u.toString();
-    } catch {
-      // best-effort fallback
-      return url.replace(/^https:\/\/www\./i, "https://");
-    }
+  // ✅ Canonicalize domains: always open apex (strip www.)
+  function canonicalDomain(d: string) {
+    const domain = String(d || "").trim().toLowerCase();
+    if (!domain) return "";
+    return domain.replace(/^www\./, "");
   }
 
   useEffect(() => {
@@ -295,7 +278,7 @@ export default function BuilderClient() {
   }
 
   // Resolve live URL:
-  // - verified domain => https://apex-domain   (strip www)
+  // - verified domain => https://(apex domain)
   // - else fallback => /s/{siteId}
   async function getLiveUrlForSite(siteId: string) {
     let openUrl = `/s/${encodeURIComponent(siteId)}`;
@@ -307,10 +290,10 @@ export default function BuilderClient() {
       const domainRaw = String(djson?.domain || "").trim();
       const status = String(djson?.status || "").toLowerCase();
 
-      if (domainRaw && status === "verified") {
-        const apex = canonicalizeDomain(domainRaw);
-        openUrl = `https://${apex}`;
-      }
+      // ✅ Always canonicalize to apex
+      const domain = canonicalDomain(domainRaw);
+
+      if (domain && status === "verified") openUrl = `https://${domain}`;
     } catch {
       // ignore
     }
@@ -319,8 +302,6 @@ export default function BuilderClient() {
   }
 
   // Publish:
-  // ✅ Save latest changes before publish
-  // ✅ Always redirect to apex (non-www) and use same-tab redirect (no popup blockers)
   async function publishSite(siteId: string) {
     setBusy("");
     setDebug("");
@@ -336,7 +317,7 @@ export default function BuilderClient() {
         return;
       }
 
-      // ✅ Critical: Save latest changes before publish (so published_html gets newest html)
+      // ✅ Save latest changes before publish (only possible for currently-loaded site)
       if (siteId === selectedId && isDirty) {
         setBusy("Saving latest changes before publish…");
         await saveSite({ silent: true });
@@ -357,14 +338,13 @@ export default function BuilderClient() {
 
       await refreshSites();
 
-      let openUrl = await getLiveUrlForSite(siteId);
-      openUrl = canonicalizeUrl(openUrl);
+      // ✅ Always open canonical (apex) live URL
+      const openUrl = await getLiveUrlForSite(siteId);
 
       setBusy("Published ✅ Opening live site…");
+      window.open(withBust(openUrl), "_blank", "noopener,noreferrer");
 
-      // ✅ IMPORTANT CHANGE:
-      // Open in the same tab (prevents popup blockers and avoids weird deployment-not-found from stale www redirect)
-      window.location.href = withBust(openUrl);
+      setTimeout(() => setBusy(""), 1200);
     } catch (e: any) {
       setBusy(e?.message || "Publish failed");
       setDebug(String(e?.stack || ""));
@@ -631,9 +611,7 @@ export default function BuilderClient() {
               ref={iframeRef}
               title="preview"
               style={{ width: "100%", height: "78vh", background: "white" }}
-              srcDoc={
-                html || "<html><body style='font-family:system-ui;padding:40px'>Generate HTML to preview.</body></html>"
-              }
+              srcDoc={html || "<html><body style='font-family:system-ui;padding:40px'>Generate HTML to preview.</body></html>"}
               sandbox="allow-same-origin"
             />
           </div>
@@ -740,3 +718,4 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
