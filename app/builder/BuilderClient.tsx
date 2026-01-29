@@ -58,7 +58,7 @@ export default function BuilderClient() {
 
   const canUseAI = useMemo(() => apiKey.trim().startsWith("sk-"), [apiKey]);
 
-  // ✅ Fix C helper: force fresh loads when opening live URLs
+  // ✅ Force fresh loads when opening live URLs
   function withBust(url: string) {
     const bust = `v=${Date.now()}`;
     return url.includes("?") ? `${url}&${bust}` : `${url}?${bust}`;
@@ -82,9 +82,19 @@ export default function BuilderClient() {
       u.hostname = canonicalizeDomain(u.hostname);
       return u.toString();
     } catch {
-      // best-effort fallback
       return url.replace(/^https:\/\/www\./i, "https://");
     }
+  }
+
+  // ✅ Domain button fix: send BOTH params so /domain works regardless of which it expects
+  function goToDomain(siteId?: string | null) {
+    const id = String(siteId || selectedId || "").trim();
+    if (!id) {
+      router.push("/domain");
+      return;
+    }
+    const q = encodeURIComponent(id);
+    router.push(`/domain?siteId=${q}&siteid=${q}`);
   }
 
   useEffect(() => {
@@ -320,7 +330,7 @@ export default function BuilderClient() {
 
   // Publish:
   // ✅ Save latest changes before publish
-  // ✅ Always redirect to apex (non-www) and use same-tab redirect (no popup blockers)
+  // ✅ Always redirect to apex (non-www) and use same-tab redirect
   async function publishSite(siteId: string) {
     setBusy("");
     setDebug("");
@@ -336,7 +346,7 @@ export default function BuilderClient() {
         return;
       }
 
-      // ✅ Critical: Save latest changes before publish (so published_html gets newest html)
+      // ✅ Save latest changes before publish (so published_html gets newest html)
       if (siteId === selectedId && isDirty) {
         setBusy("Saving latest changes before publish…");
         await saveSite({ silent: true });
@@ -361,9 +371,6 @@ export default function BuilderClient() {
       openUrl = canonicalizeUrl(openUrl);
 
       setBusy("Published ✅ Opening live site…");
-
-      // ✅ IMPORTANT CHANGE:
-      // Open in the same tab (prevents popup blockers and avoids weird deployment-not-found from stale www redirect)
       window.location.href = withBust(openUrl);
     } catch (e: any) {
       setBusy(e?.message || "Publish failed");
@@ -469,11 +476,7 @@ export default function BuilderClient() {
                         {isBusy ? "Publishing…" : "Publish"}
                       </button>
 
-                      <button
-                        style={secondaryBtn}
-                        onClick={() => router.push(`/domain?siteId=${encodeURIComponent(s.id)}`)}
-                        disabled={isBusy}
-                      >
+                      <button style={secondaryBtn} onClick={() => goToDomain(s.id)} disabled={isBusy}>
                         Domain
                       </button>
 
@@ -607,7 +610,7 @@ export default function BuilderClient() {
                 Send
               </button>
 
-              <button style={secondaryBtn} onClick={() => router.push("/domain")}>
+              <button style={secondaryBtn} onClick={() => goToDomain(selectedId)}>
                 Connect Domain
               </button>
             </div>
@@ -631,9 +634,7 @@ export default function BuilderClient() {
               ref={iframeRef}
               title="preview"
               style={{ width: "100%", height: "78vh", background: "white" }}
-              srcDoc={
-                html || "<html><body style='font-family:system-ui;padding:40px'>Generate HTML to preview.</body></html>"
-              }
+              srcDoc={html || "<html><body style='font-family:system-ui;padding:40px'>Generate HTML to preview.</body></html>"}
               sandbox="allow-same-origin"
             />
           </div>
@@ -740,6 +741,7 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
 
 
 
