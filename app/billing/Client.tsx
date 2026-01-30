@@ -43,7 +43,6 @@ export default function BillingClient() {
     setMsg("");
 
     try {
-      // If not signed in, send to login and back to billing
       if (!token) {
         router.push(
           `/login?next=${encodeURIComponent(
@@ -53,7 +52,6 @@ export default function BillingClient() {
         return;
       }
 
-      // ✅ IMPORTANT: call the correct route handler
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
         headers: {
@@ -63,19 +61,19 @@ export default function BillingClient() {
         body: JSON.stringify({ next }),
       });
 
-      // If middleware ever redirects / returns HTML, read text first
       const text = await res.text();
       let data: any = {};
+
       try {
         data = JSON.parse(text);
       } catch {
         throw new Error(
-          `Checkout response not JSON (${res.status}). ${text.slice(0, 180)}`
+          `Checkout response not JSON (${res.status}). ${text.slice(0, 200)}`
         );
       }
 
-      if (!res.ok) throw new Error(data?.error || `Checkout failed (${res.status})`);
-      if (!data?.url) throw new Error("Checkout succeeded but returned no url");
+      if (!res.ok) throw new Error(data?.error || "Checkout failed");
+      if (!data?.url) throw new Error("Stripe did not return a checkout URL");
 
       window.location.href = data.url;
     } catch (e: any) {
@@ -84,36 +82,29 @@ export default function BillingClient() {
   }
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        display: "grid",
-        placeItems: "center",
-        padding: 24,
-        color: "white",
-        background:
-          "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(124,58,237) 0%, rgb(109,40,217) 35%, rgb(91,33,182) 100%)",
-        fontFamily:
-          'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
-      }}
-    >
-      <div
-        style={{
-          width: "min(760px, 92vw)",
-          background: "rgba(255,255,255,0.12)",
-          border: "1px solid rgba(255,255,255,0.18)",
-          borderRadius: 16,
-          padding: 18,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
-        }}
-      >
-        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 900 }}>ForgeSite Billing</h1>
+    <main style={page}>
+      {/* bottom-left links */}
+      <div style={footerLinks}>
+        <button onClick={() => router.push("/terms")} style={linkBtn}>
+          Terms
+        </button>
+        <span style={{ opacity: 0.7 }}>•</span>
+        <button onClick={() => router.push("/privacy")} style={linkBtn}>
+          Privacy
+        </button>
+      </div>
+
+      <div style={card}>
+        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 900 }}>
+          ForgeSite Billing
+        </h1>
 
         <p style={{ marginTop: 8, opacity: 0.9 }}>
-          Subscribe to access the Builder. After payment you’ll return to: <b>{next}</b>
+          Subscribe to access the Builder. After payment you’ll return to:{" "}
+          <b>{next}</b>
         </p>
 
-        <div style={{ marginTop: 12, opacity: 0.9, fontSize: 14 }}>
+        <div style={{ marginTop: 12, opacity: 0.9 }}>
           {loading ? (
             "Checking session…"
           ) : email ? (
@@ -121,36 +112,19 @@ export default function BillingClient() {
               Signed in as <b>{email}</b>
             </>
           ) : (
-            "Not signed in (login first)."
+            "Not signed in."
           )}
         </div>
 
-        {msg ? (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              borderRadius: 12,
-              background: "rgba(185, 28, 28, .25)",
-              border: "1px solid rgba(185, 28, 28, .5)",
-              whiteSpace: "pre-wrap",
-            }}
-          >
+        {msg && (
+          <div style={errorBox}>
             {msg}
           </div>
-        ) : null}
+        )}
 
-        <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 10, marginTop: 18, flexWrap: "wrap" }}>
           <button onClick={goCheckout} disabled={loading} style={primaryBtn}>
             {loading ? "Loading…" : "Subscribe"}
-          </button>
-
-          <button onClick={() => router.push("/terms")} style={secondaryBtn}>
-            Terms
-          </button>
-
-          <button onClick={() => router.push("/privacy")} style={secondaryBtn}>
-            Privacy
           </button>
 
           <button
@@ -175,6 +149,64 @@ export default function BillingClient() {
   );
 }
 
+/* ---------------- styles ---------------- */
+
+const page: React.CSSProperties = {
+  minHeight: "100vh",
+  display: "grid",
+  placeItems: "center",
+  padding: 24,
+  color: "white",
+  background:
+    "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(124,58,237) 0%, rgb(109,40,217) 35%, rgb(91,33,182) 100%)",
+  fontFamily:
+    'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
+  position: "relative",
+};
+
+const card: React.CSSProperties = {
+  width: "min(760px, 92vw)",
+  background: "rgba(255,255,255,0.12)",
+  border: "1px solid rgba(255,255,255,0.18)",
+  borderRadius: 16,
+  padding: 20,
+  boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
+};
+
+const footerLinks: React.CSSProperties = {
+  position: "fixed",
+  left: 18,
+  bottom: 16,
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "8px 12px",
+  borderRadius: 999,
+  background: "rgba(0,0,0,0.25)",
+  border: "1px solid rgba(255,255,255,0.15)",
+  backdropFilter: "blur(8px)",
+};
+
+const linkBtn: React.CSSProperties = {
+  background: "transparent",
+  border: "none",
+  color: "white",
+  fontSize: 12,
+  fontWeight: 700,
+  cursor: "pointer",
+  padding: 0,
+  textDecoration: "underline",
+  textUnderlineOffset: 3,
+};
+
+const errorBox: React.CSSProperties = {
+  marginTop: 12,
+  padding: 12,
+  borderRadius: 12,
+  background: "rgba(185, 28, 28, 0.25)",
+  border: "1px solid rgba(185, 28, 28, 0.5)",
+};
+
 const primaryBtn: React.CSSProperties = {
   padding: "12px 14px",
   borderRadius: 12,
@@ -194,4 +226,6 @@ const secondaryBtn: React.CSSProperties = {
   fontWeight: 900,
   cursor: "pointer",
 };
+
+
 
