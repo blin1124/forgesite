@@ -27,6 +27,25 @@ async function readResponse(res: Response) {
   return { text, json };
 }
 
+// ✅ Step 2A helper: check entitlement and decide where to route
+async function checkEntitlementAndGate(token: string) {
+  const res = await fetch("/api/entitlement", {
+    method: "GET",
+    headers: { authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+
+  const { text, json } = await readResponse(res);
+
+  if (!res.ok) {
+    // treat any failure as not entitled
+    return { ok: false, active: false, error: json?.error || text || "Entitlement check failed" };
+  }
+
+  const active = Boolean(json?.active);
+  return { ok: true, active, status: String(json?.status || ""), error: "" };
+}
+
 export default function BuilderClient() {
   const router = useRouter();
 
@@ -58,6 +77,9 @@ export default function BuilderClient() {
 
   const canUseAI = useMemo(() => apiKey.trim().startsWith("sk-"), [apiKey]);
 
+  // ✅ Step 2A: access gating state
+  const [checkingAccess, setCheckingAccess] = useState(true);
+
   // force fresh loads when opening live URLs
   function withBust(url: string) {
     const bust = `v=${Date.now()}`;
@@ -87,15 +109,46 @@ export default function BuilderClient() {
 
   useEffect(() => {
     const run = async () => {
+      setBusy("");
+      setDebug("");
+      setCheckingAccess(true);
+
       try {
         const supabase = createSupabaseBrowserClient();
         const { data } = await supabase.auth.getSession();
-        setEmail(data?.session?.user?.email || "");
+
+        const session = data?.session;
+        const token = session?.access_token || "";
+        const userEmail = session?.user?.email || "";
+
+        setEmail(userEmail);
+
+        // ✅ No session => send to login, then back to builder
+        if (!token) {
+          router.replace(`/login?next=${encodeURIComponent("/builder")}`);
+          return;
+        }
+
+        // ✅ Entitlement check
+        const ent = await checkEntitlementAndGate(token);
+
+        // Not active => send to billing (with next=/builder)
+        if (!ent.active) {
+          router.replace(`/billing?next=${encodeURIComponent("/builder")}`);
+          return;
+        }
+
+        // ✅ Active => load builder data
+        await refreshSites();
       } catch {
-        setEmail("");
+        // if anything weird happens, be safe and send to billing
+        router.replace(`/billing?next=${encodeURIComponent("/builder")}`);
+        return;
+      } finally {
+        setCheckingAccess(false);
       }
-      await refreshSites();
     };
+
     run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -358,8 +411,6 @@ export default function BuilderClient() {
       openUrl = canonicalizeUrl(openUrl);
 
       setBusy("Published ✅ Opening live site…");
-
-      // same-tab navigation prevents popup blocking and “stale tab” confusion
       window.location.href = withBust(openUrl);
     } catch (e: any) {
       setBusy(e?.message || "Publish failed");
@@ -370,7 +421,7 @@ export default function BuilderClient() {
   }
 
   // =========================
-  // A) DELETE SITE (safe)
+  // DELETE SITE (safe)
   // =========================
   async function deleteSite(siteId: string) {
     setBusy("");
@@ -401,7 +452,6 @@ export default function BuilderClient() {
       const { text, json } = await readResponse(res);
       if (!res.ok) throw new Error(json?.error || `Delete failed (${res.status}): ${text.slice(0, 240)}`);
 
-      // If we deleted the selected site, clear the editor
       if (selectedId === siteId) {
         setSelectedId(null);
         setPrompt("");
@@ -428,6 +478,30 @@ export default function BuilderClient() {
     const supabase = createSupabaseBrowserClient();
     await supabase.auth.signOut();
     router.push("/login?next=%2Fbuilder");
+  }
+
+  // ✅ While checking entitlement, render a safe loading screen (prevents UI flash)
+  if (checkingAccess) {
+    return (
+      <main
+        style={{
+          minHeight: "100vh",
+          display: "grid",
+          placeItems: "center",
+          padding: 24,
+          color: "white",
+          background:
+            "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(124,58,237) 0%, rgb(109,40,217) 35%, rgb(91,33,182) 100%)",
+          fontFamily:
+            'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
+        }}
+      >
+        <div style={{ ...card, width: "min(720px, 92vw)", textAlign: "center" }}>
+          <div style={{ fontSize: 22, fontWeight: 900 }}>Loading Builder…</div>
+          <div style={{ marginTop: 10, opacity: 0.9 }}>Checking subscription status.</div>
+        </div>
+      </main>
+    );
   }
 
   return (
@@ -539,7 +613,6 @@ export default function BuilderClient() {
                         View
                       </button>
 
-                      {/* B) DELETE BUTTON */}
                       <button style={dangerBtn} onClick={() => deleteSite(s.id)} disabled={isBusy}>
                         Delete
                       </button>
@@ -795,7 +868,6 @@ const chatBox: React.CSSProperties = {
   background: "rgba(0,0,0,0.18)",
 };
 
-// C) DELETE BUTTON STYLE
 const dangerBtn: React.CSSProperties = {
   padding: "12px 14px",
   borderRadius: 12,
@@ -805,6 +877,8 @@ const dangerBtn: React.CSSProperties = {
   fontWeight: 900,
   cursor: "pointer",
 };
+
+
 
 
 
