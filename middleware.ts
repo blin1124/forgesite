@@ -28,7 +28,7 @@ function toApex(host: string) {
 }
 
 function isBypassPath(pathname: string) {
-  // Don’t rewrite these routes
+  // Don’t rewrite these routes (app pages + your legal pages)
   return (
     pathname.startsWith("/api") ||
     pathname.startsWith("/login") ||
@@ -39,7 +39,8 @@ function isBypassPath(pathname: string) {
     pathname.startsWith("/account") ||
     pathname.startsWith("/settings") ||
     pathname.startsWith("/_hosted") ||
-    pathname.startsWith("/privacy")
+    pathname.startsWith("/privacy") ||
+    pathname.startsWith("/terms") // ✅ add this to be safe
   );
 }
 
@@ -50,7 +51,8 @@ export async function middleware(req: NextRequest) {
   // Skip paths we never want to rewrite
   if (isBypassPath(pathname)) return NextResponse.next();
 
-  const hostHeader = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
+  const hostHeader =
+    req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
   const host = stripPort(hostHeader).toLowerCase();
   const apex = toApex(hostHeader);
 
@@ -71,15 +73,10 @@ export async function middleware(req: NextRequest) {
   // If missing, don’t break the app
   if (!supabaseUrl || !serviceKey) return NextResponse.next();
 
-  // Lookup BOTH:
-  // - exact host (might be www.powertrainbaseball.com)
-  // - apex host (powertrainbaseball.com)
-  // We also require verified to prevent routing unverified domains.
-  //
-  // PostgREST OR syntax:
-  //   &or=(domain.eq.<host>,domain.eq.<apex>)
-  // If host==apex, it still works.
-  const or = `or=(domain.eq.${encodeURIComponent(host)},domain.eq.${encodeURIComponent(apex)})`;
+  // Lookup BOTH exact host + apex host, require verified
+  const or = `or=(domain.eq.${encodeURIComponent(
+    host
+  )},domain.eq.${encodeURIComponent(apex)})`;
 
   const lookupUrl =
     `${supabaseUrl}/rest/v1/custom_domains` +
@@ -106,10 +103,8 @@ export async function middleware(req: NextRequest) {
     }>;
 
     const row = rows?.[0];
-
     if (!row?.site_id) return NextResponse.next();
 
-    // Require verified either by bool or status
     const st = String(row.status || "").toLowerCase();
     const isVerified = row.verified === true || st === "verified";
     if (!isVerified) return NextResponse.next();
@@ -122,5 +117,6 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 }
+
 
 
