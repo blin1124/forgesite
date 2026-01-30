@@ -15,6 +15,24 @@ async function readResponse(res: Response) {
   return { text, json };
 }
 
+async function checkEntitlement(token: string) {
+  const res = await fetch("/api/entitlement", {
+    method: "GET",
+    headers: { authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+
+  const { text, json } = await readResponse(res);
+  if (!res.ok) return { ok: false, active: false, status: "inactive", error: json?.error || text || "Failed" };
+
+  return {
+    ok: true,
+    active: Boolean(json?.active),
+    status: String(json?.status || "inactive"),
+    error: "",
+  };
+}
+
 export default function BillingClient() {
   const router = useRouter();
   const sp = useSearchParams();
@@ -26,8 +44,10 @@ export default function BillingClient() {
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string>("");
 
-  // ✅ New: entitlement state
-  const [entitled, setEntitled] = useState(false);
+  // ✅ Step 2B: entitlement state
+  const [checkingEntitlement, setCheckingEntitlement] = useState(false);
+  const [isActive, setIsActive] = useState(false);
+  const [entStatus, setEntStatus] = useState<string>("inactive");
 
   useEffect(() => {
     const run = async () => {
@@ -35,36 +55,26 @@ export default function BillingClient() {
         const supabase = createSupabaseBrowserClient();
         const { data, error } = await supabase.auth.getSession();
 
-        if (error || !data?.session?.access_token) {
+        if (error) {
           setEmail(null);
           setToken("");
-          setEntitled(false);
-          return;
+        } else {
+          const t = data?.session?.access_token ?? "";
+          setEmail(data?.session?.user?.email ?? null);
+          setToken(t);
+
+          // ✅ If logged in, check entitlement once
+          if (t) {
+            setCheckingEntitlement(true);
+            const ent = await checkEntitlement(t);
+            setIsActive(Boolean(ent.active));
+            setEntStatus(ent.status || "inactive");
+            setCheckingEntitlement(false);
+          }
         }
-
-        const t = data.session.access_token;
-        setEmail(data.session.user.email ?? null);
-        setToken(t);
-
-        // ✅ Check entitlement once on load
-        const res = await fetch("/api/entitlement", {
-          method: "GET",
-          headers: { authorization: `Bearer ${t}` },
-          cache: "no-store",
-        });
-
-        const { text, json } = await readResponse(res);
-        if (!res.ok) {
-          setEntitled(false);
-          setMsg(json?.error || `Entitlement check failed (${res.status}): ${text.slice(0, 180)}`);
-          return;
-        }
-
-        setEntitled(Boolean(json?.active));
       } catch {
         setEmail(null);
         setToken("");
-        setEntitled(false);
       } finally {
         setLoading(false);
       }
@@ -73,19 +83,19 @@ export default function BillingClient() {
     run();
   }, []);
 
-  async function goCheckoutOrContinue() {
+  async function goCheckout() {
     setMsg("");
 
     try {
-      // Not signed in -> login -> come back here
-      if (!token) {
-        router.push(`/login?next=${encodeURIComponent(`/billing?next=${encodeURIComponent(next)}`)}`);
+      // If already active, don't charge again — just go to builder
+      if (isActive) {
+        router.push(next);
         return;
       }
 
-      // ✅ If already paid/trialing, do NOT send to Stripe again
-      if (entitled) {
-        router.push(next);
+      // If not signed in, send to login and back to billing
+      if (!token) {
+        router.push(`/login?next=${encodeURIComponent(`/billing?next=${encodeURIComponent(next)}`)}`);
         return;
       }
 
@@ -98,15 +108,24 @@ export default function BillingClient() {
         body: JSON.stringify({ next }),
       });
 
-      const { text, json } = await readResponse(res);
-      if (!res.ok) throw new Error(json?.error || `Checkout failed (${res.status}): ${text.slice(0, 180)}`);
-      if (!json?.url) throw new Error("Checkout succeeded but returned no url");
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(`Checkout response not JSON (${res.status}). ${text.slice(0, 180)}`);
+      }
 
-      window.location.href = json.url;
+      if (!res.ok) throw new Error(data?.error || `Checkout failed (${res.status})`);
+      if (!data?.url) throw new Error("Checkout succeeded but returned no url");
+
+      window.location.href = data.url;
     } catch (e: any) {
       setMsg(e?.message || "Checkout failed");
     }
   }
+
+  const alreadySubscribed = !loading && !checkingEntitlement && isActive;
 
   return (
     <main
@@ -135,16 +154,40 @@ export default function BillingClient() {
         <h1 style={{ margin: 0, fontSize: 28, fontWeight: 900 }}>ForgeSite Billing</h1>
 
         <p style={{ marginTop: 8, opacity: 0.9 }}>
-          {entitled ? (
-            <>✅ You’re already subscribed. Continue to: <b>{next}</b></>
-          ) : (
-            <>Subscribe to access the Builder. After payment you’ll return to: <b>{next}</b></>
-          )}
+          Subscribe to access the Builder. After payment you’ll return to: <b>{next}</b>
         </p>
 
         <div style={{ marginTop: 12, opacity: 0.9, fontSize: 14 }}>
-          {loading ? "Checking session…" : email ? <>Signed in as <b>{email}</b></> : "Not signed in (login first)."}
+          {loading ? (
+            "Checking session…"
+          ) : email ? (
+            <>
+              Signed in as <b>{email}</b>
+            </>
+          ) : (
+            "Not signed in (login first)."
+          )}
         </div>
+
+        {checkingEntitlement ? (
+          <div style={{ marginTop: 12, opacity: 0.9, fontSize: 14 }}>Checking subscription…</div>
+        ) : null}
+
+        {alreadySubscribed ? (
+          <div
+            style={{
+              marginTop: 12,
+              padding: 12,
+              borderRadius: 12,
+              background: "rgba(16, 185, 129, .18)",
+              border: "1px solid rgba(16, 185, 129, .35)",
+              whiteSpace: "pre-wrap",
+              fontWeight: 900,
+            }}
+          >
+            You’re already subscribed ✅ (status: {entStatus})
+          </div>
+        ) : null}
 
         {msg ? (
           <div
@@ -162,8 +205,8 @@ export default function BillingClient() {
         ) : null}
 
         <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
-          <button onClick={goCheckoutOrContinue} disabled={loading} style={primaryBtn}>
-            {loading ? "Loading…" : entitled ? "Go to Builder" : "Subscribe"}
+          <button onClick={goCheckout} disabled={loading || checkingEntitlement} style={primaryBtn}>
+            {loading || checkingEntitlement ? "Loading…" : alreadySubscribed ? "Go to Builder" : "Subscribe"}
           </button>
 
           <button onClick={() => router.push("/terms")} style={secondaryBtn}>
@@ -175,9 +218,7 @@ export default function BillingClient() {
           </button>
 
           <button
-            onClick={() =>
-              router.push(`/login?next=${encodeURIComponent(`/billing?next=${encodeURIComponent(next)}`)}`)
-            }
+            onClick={() => router.push(`/login?next=${encodeURIComponent(`/billing?next=${encodeURIComponent(next)}`)}`)}
             style={secondaryBtn}
           >
             Back to login
@@ -211,6 +252,8 @@ const secondaryBtn: React.CSSProperties = {
   fontWeight: 900,
   cursor: "pointer",
 };
+
+
 
 
 
