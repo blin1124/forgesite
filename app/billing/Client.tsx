@@ -4,35 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
-async function readResponse(res: Response) {
-  const text = await res.text();
-  let json: any = null;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    json = null;
-  }
-  return { text, json };
-}
-
-async function checkEntitlement(token: string) {
-  const res = await fetch("/api/entitlement", {
-    method: "GET",
-    headers: { authorization: `Bearer ${token}` },
-    cache: "no-store",
-  });
-
-  const { text, json } = await readResponse(res);
-  if (!res.ok) return { ok: false, active: false, status: "inactive", error: json?.error || text || "Failed" };
-
-  return {
-    ok: true,
-    active: Boolean(json?.active),
-    status: String(json?.status || "inactive"),
-    error: "",
-  };
-}
-
 export default function BillingClient() {
   const router = useRouter();
   const sp = useSearchParams();
@@ -44,11 +15,6 @@ export default function BillingClient() {
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string>("");
 
-  // ✅ Step 2B: entitlement state
-  const [checkingEntitlement, setCheckingEntitlement] = useState(false);
-  const [isActive, setIsActive] = useState(false);
-  const [entStatus, setEntStatus] = useState<string>("inactive");
-
   useEffect(() => {
     const run = async () => {
       try {
@@ -59,18 +25,8 @@ export default function BillingClient() {
           setEmail(null);
           setToken("");
         } else {
-          const t = data?.session?.access_token ?? "";
           setEmail(data?.session?.user?.email ?? null);
-          setToken(t);
-
-          // ✅ If logged in, check entitlement once
-          if (t) {
-            setCheckingEntitlement(true);
-            const ent = await checkEntitlement(t);
-            setIsActive(Boolean(ent.active));
-            setEntStatus(ent.status || "inactive");
-            setCheckingEntitlement(false);
-          }
+          setToken(data?.session?.access_token ?? "");
         }
       } catch {
         setEmail(null);
@@ -87,15 +43,13 @@ export default function BillingClient() {
     setMsg("");
 
     try {
-      // If already active, don't charge again — just go to builder
-      if (isActive) {
-        router.push(next);
-        return;
-      }
-
       // If not signed in, send to login and back to billing
       if (!token) {
-        router.push(`/login?next=${encodeURIComponent(`/billing?next=${encodeURIComponent(next)}`)}`);
+        router.push(
+          `/login?next=${encodeURIComponent(
+            `/billing?next=${encodeURIComponent(next)}`
+          )}`
+        );
         return;
       }
 
@@ -113,7 +67,9 @@ export default function BillingClient() {
       try {
         data = JSON.parse(text);
       } catch {
-        throw new Error(`Checkout response not JSON (${res.status}). ${text.slice(0, 180)}`);
+        throw new Error(
+          `Checkout response not JSON (${res.status}). ${text.slice(0, 180)}`
+        );
       }
 
       if (!res.ok) throw new Error(data?.error || `Checkout failed (${res.status})`);
@@ -124,8 +80,6 @@ export default function BillingClient() {
       setMsg(e?.message || "Checkout failed");
     }
   }
-
-  const alreadySubscribed = !loading && !checkingEntitlement && isActive;
 
   return (
     <main
@@ -139,8 +93,30 @@ export default function BillingClient() {
           "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(124,58,237) 0%, rgb(109,40,217) 35%, rgb(91,33,182) 100%)",
         fontFamily:
           'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
+        position: "relative", // ✅ allows bottom-left links
       }}
     >
+      {/* ✅ bottom-left legal links (safe UI-only change) */}
+      <div
+        style={{
+          position: "fixed",
+          left: 18,
+          bottom: 16,
+          display: "flex",
+          gap: 12,
+          alignItems: "center",
+          zIndex: 50,
+        }}
+      >
+        <button onClick={() => router.push("/terms")} style={linkBtn}>
+          Terms
+        </button>
+        <span style={{ opacity: 0.65 }}>•</span>
+        <button onClick={() => router.push("/privacy")} style={linkBtn}>
+          Privacy
+        </button>
+      </div>
+
       <div
         style={{
           width: "min(760px, 92vw)",
@@ -169,26 +145,6 @@ export default function BillingClient() {
           )}
         </div>
 
-        {checkingEntitlement ? (
-          <div style={{ marginTop: 12, opacity: 0.9, fontSize: 14 }}>Checking subscription…</div>
-        ) : null}
-
-        {alreadySubscribed ? (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              borderRadius: 12,
-              background: "rgba(16, 185, 129, .18)",
-              border: "1px solid rgba(16, 185, 129, .35)",
-              whiteSpace: "pre-wrap",
-              fontWeight: 900,
-            }}
-          >
-            You’re already subscribed ✅ (status: {entStatus})
-          </div>
-        ) : null}
-
         {msg ? (
           <div
             style={{
@@ -205,20 +161,18 @@ export default function BillingClient() {
         ) : null}
 
         <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
-          <button onClick={goCheckout} disabled={loading || checkingEntitlement} style={primaryBtn}>
-            {loading || checkingEntitlement ? "Loading…" : alreadySubscribed ? "Go to Builder" : "Subscribe"}
-          </button>
-
-          <button onClick={() => router.push("/terms")} style={secondaryBtn}>
-            Terms
-          </button>
-
-          <button onClick={() => router.push("/privacy")} style={secondaryBtn}>
-            Privacy
+          <button onClick={goCheckout} disabled={loading} style={primaryBtn}>
+            {loading ? "Loading…" : "Subscribe"}
           </button>
 
           <button
-            onClick={() => router.push(`/login?next=${encodeURIComponent(`/billing?next=${encodeURIComponent(next)}`)}`)}
+            onClick={() =>
+              router.push(
+                `/login?next=${encodeURIComponent(
+                  `/billing?next=${encodeURIComponent(next)}`
+                )}`
+              )
+            }
             style={secondaryBtn}
           >
             Back to login
@@ -252,6 +206,19 @@ const secondaryBtn: React.CSSProperties = {
   fontWeight: 900,
   cursor: "pointer",
 };
+
+// ✅ smaller “link style” buttons for bottom-left
+const linkBtn: React.CSSProperties = {
+  padding: "6px 8px",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(0,0,0,0.18)",
+  color: "rgba(255,255,255,0.92)",
+  fontWeight: 800,
+  fontSize: 12,
+  cursor: "pointer",
+};
+
 
 
 
