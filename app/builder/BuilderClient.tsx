@@ -58,10 +58,31 @@ export default function BuilderClient() {
 
   const canUseAI = useMemo(() => apiKey.trim().startsWith("sk-"), [apiKey]);
 
-  // ✅ Fix C helper: force fresh loads when opening live URLs
+  // force fresh loads when opening live URLs
   function withBust(url: string) {
     const bust = `v=${Date.now()}`;
     return url.includes("?") ? `${url}&${bust}` : `${url}?${bust}`;
+  }
+
+  // ALWAYS open apex (strip leading www.)
+  function canonicalizeDomain(d: string) {
+    return String(d || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\.$/, "")
+      .replace(/^www\./, "");
+  }
+
+  function canonicalizeUrl(url: string) {
+    if (!url) return url;
+    if (!url.startsWith("http")) return url;
+    try {
+      const u = new URL(url);
+      u.hostname = canonicalizeDomain(u.hostname);
+      return u.toString();
+    } catch {
+      return url.replace(/^https:\/\/www\./i, "https://");
+    }
   }
 
   useEffect(() => {
@@ -137,7 +158,6 @@ export default function BuilderClient() {
     }
   }
 
-  // ✅ UPDATED: Save now sends Bearer token (required by your /api/sites/save route)
   async function saveSite(opts?: { silent?: boolean }) {
     if (!opts?.silent) {
       setBusy("");
@@ -148,24 +168,11 @@ export default function BuilderClient() {
     if (!html.trim()) return setBusy("HTML is empty. Generate first.");
 
     try {
-      // Get session token
-      const supabase = createSupabaseBrowserClient();
-      const { data: sessionRes } = await supabase.auth.getSession();
-      const token = sessionRes?.session?.access_token;
-
-      if (!token) {
-        router.replace("/login?next=/builder");
-        return;
-      }
-
       if (!opts?.silent) setBusy("Saving…");
 
       const res = await fetch("/api/sites/save", {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${token}`,
-        },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({
           id: selectedId,
           template: "html",
@@ -286,7 +293,7 @@ export default function BuilderClient() {
   }
 
   // Resolve live URL:
-  // - verified domain => https://domain
+  // - verified domain => https://apex-domain (strip www)
   // - else fallback => /s/{siteId}
   async function getLiveUrlForSite(siteId: string) {
     let openUrl = `/s/${encodeURIComponent(siteId)}`;
@@ -295,10 +302,13 @@ export default function BuilderClient() {
       const dres = await fetch(`/api/sites/${encodeURIComponent(siteId)}/domain`, { cache: "no-store" });
       const { json: djson } = await readResponse(dres);
 
-      const domain = String(djson?.domain || "").trim();
+      const domainRaw = String(djson?.domain || "").trim();
       const status = String(djson?.status || "").toLowerCase();
 
-      if (domain && status === "verified") openUrl = `https://${domain}`;
+      if (domainRaw && status === "verified") {
+        const apex = canonicalizeDomain(domainRaw);
+        openUrl = `https://${apex}`;
+      }
     } catch {
       // ignore
     }
@@ -307,7 +317,8 @@ export default function BuilderClient() {
   }
 
   // Publish:
-  // ✅ If publishing the currently-selected site AND we have local unsaved edits, save first.
+  // ✅ Save latest changes before publish
+  // ✅ Open in SAME TAB to avoid popup blockers
   async function publishSite(siteId: string) {
     setBusy("");
     setDebug("");
@@ -323,7 +334,6 @@ export default function BuilderClient() {
         return;
       }
 
-      // ✅ Critical: Save latest changes before publish (so published_html gets newest html)
       if (siteId === selectedId && isDirty) {
         setBusy("Saving latest changes before publish…");
         await saveSite({ silent: true });
@@ -344,14 +354,13 @@ export default function BuilderClient() {
 
       await refreshSites();
 
-      const openUrl = await getLiveUrlForSite(siteId);
+      let openUrl = await getLiveUrlForSite(siteId);
+      openUrl = canonicalizeUrl(openUrl);
 
       setBusy("Published ✅ Opening live site…");
 
-      // ✅ Fix C: bust cache on open
-      window.open(withBust(openUrl), "_blank", "noopener,noreferrer");
-
-      setTimeout(() => setBusy(""), 1200);
+      // same-tab navigation prevents popup blocking and “stale tab” confusion
+      window.location.href = withBust(openUrl);
     } catch (e: any) {
       setBusy(e?.message || "Publish failed");
       setDebug(String(e?.stack || ""));
@@ -725,6 +734,8 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
+
 
 
 
