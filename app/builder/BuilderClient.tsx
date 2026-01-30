@@ -369,6 +369,61 @@ export default function BuilderClient() {
     }
   }
 
+  // =========================
+  // A) DELETE SITE (safe)
+  // =========================
+  async function deleteSite(siteId: string) {
+    setBusy("");
+    setDebug("");
+
+    const ok = window.confirm(
+      "Delete this site?\n\nThis will remove the site and its connected domain rows. This cannot be undone."
+    );
+    if (!ok) return;
+
+    try {
+      setBusy("Deleting…");
+
+      const supabase = createSupabaseBrowserClient();
+      const { data: sessionRes } = await supabase.auth.getSession();
+      const token = sessionRes?.session?.access_token;
+
+      if (!token) {
+        router.replace("/login?next=/builder");
+        return;
+      }
+
+      const res = await fetch(`/api/sites/${encodeURIComponent(siteId)}/delete`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+      const { text, json } = await readResponse(res);
+      if (!res.ok) throw new Error(json?.error || `Delete failed (${res.status}): ${text.slice(0, 240)}`);
+
+      // If we deleted the selected site, clear the editor
+      if (selectedId === siteId) {
+        setSelectedId(null);
+        setPrompt("");
+        setHtml("");
+        setHistory([]);
+        setChatInput("");
+        setFileUrl("");
+        setFileMime("");
+        setFileName("");
+        setIsDirty(false);
+      }
+
+      await refreshSites();
+
+      setBusy("Deleted ✅");
+      setTimeout(() => setBusy(""), 1200);
+    } catch (e: any) {
+      setBusy(e?.message || "Delete failed");
+      setDebug(String(e?.stack || ""));
+    }
+  }
+
   async function logout() {
     const supabase = createSupabaseBrowserClient();
     await supabase.auth.signOut();
@@ -482,6 +537,11 @@ export default function BuilderClient() {
                         disabled={isBusy}
                       >
                         View
+                      </button>
+
+                      {/* B) DELETE BUTTON */}
+                      <button style={dangerBtn} onClick={() => deleteSite(s.id)} disabled={isBusy}>
+                        Delete
                       </button>
                     </div>
                   </div>
@@ -734,6 +794,19 @@ const chatBox: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.18)",
   background: "rgba(0,0,0,0.18)",
 };
+
+// C) DELETE BUTTON STYLE
+const dangerBtn: React.CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.25)",
+  background: "rgba(185, 28, 28, .85)",
+  color: "white",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
+
 
 
 
