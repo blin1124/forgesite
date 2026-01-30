@@ -4,6 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
+type EntitlementResp = {
+  ok?: boolean;
+  active?: boolean;
+  status?: string | null;
+  current_period_end?: string | null;
+  error?: string;
+};
+
 export default function BillingClient() {
   const router = useRouter();
   const sp = useSearchParams();
@@ -15,6 +23,10 @@ export default function BillingClient() {
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string>("");
 
+  // ✅ New: entitlement status
+  const [checkingEntitlement, setCheckingEntitlement] = useState(false);
+  const [isSubscribed, setIsSubscribed] = useState(false);
+
   useEffect(() => {
     const run = async () => {
       try {
@@ -24,13 +36,41 @@ export default function BillingClient() {
         if (error) {
           setEmail(null);
           setToken("");
+          setIsSubscribed(false);
         } else {
-          setEmail(data?.session?.user?.email ?? null);
-          setToken(data?.session?.access_token ?? "");
+          const em = data?.session?.user?.email ?? null;
+          const tk = data?.session?.access_token ?? "";
+          setEmail(em);
+          setToken(tk);
+
+          // ✅ If signed in, check entitlement once
+          if (tk) {
+            setCheckingEntitlement(true);
+            try {
+              const r = await fetch("/api/entitlement", {
+                method: "GET",
+                headers: { authorization: `Bearer ${tk}` },
+                cache: "no-store",
+              });
+
+              const j = (await r.json()) as EntitlementResp;
+
+              if (r.ok && j?.active === true) {
+                setIsSubscribed(true);
+              } else {
+                setIsSubscribed(false);
+              }
+            } catch {
+              setIsSubscribed(false);
+            } finally {
+              setCheckingEntitlement(false);
+            }
+          }
         }
       } catch {
         setEmail(null);
         setToken("");
+        setIsSubscribed(false);
       } finally {
         setLoading(false);
       }
@@ -50,6 +90,12 @@ export default function BillingClient() {
             `/billing?next=${encodeURIComponent(next)}`
           )}`
         );
+        return;
+      }
+
+      // ✅ If already subscribed, just go where they were headed
+      if (isSubscribed) {
+        router.push(next);
         return;
       }
 
@@ -81,6 +127,8 @@ export default function BillingClient() {
     }
   }
 
+  const showSubscribeLine = !loading && !checkingEntitlement && !isSubscribed;
+
   return (
     <main
       style={{
@@ -93,10 +141,10 @@ export default function BillingClient() {
           "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(124,58,237) 0%, rgb(109,40,217) 35%, rgb(91,33,182) 100%)",
         fontFamily:
           'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
-        position: "relative", // ✅ allows bottom-left links
+        position: "relative",
       }}
     >
-      {/* ✅ bottom-left legal links (safe UI-only change) */}
+      {/* ✅ bottom-left legal links */}
       <div
         style={{
           position: "fixed",
@@ -129,9 +177,14 @@ export default function BillingClient() {
       >
         <h1 style={{ margin: 0, fontSize: 28, fontWeight: 900 }}>ForgeSite Billing</h1>
 
-        <p style={{ marginTop: 8, opacity: 0.9 }}>
-          Subscribe to access the Builder. After payment you’ll return to: <b>{next}</b>
-        </p>
+        {/* ✅ Only show this line for users who are NOT subscribed */}
+        {showSubscribeLine ? (
+          <p style={{ marginTop: 8, opacity: 0.9 }}>
+            Subscribe to access the Builder. After payment you’ll return to: <b>{next}</b>
+          </p>
+        ) : (
+          <div style={{ height: 10 }} />
+        )}
 
         <div style={{ marginTop: 12, opacity: 0.9, fontSize: 14 }}>
           {loading ? (
@@ -144,6 +197,30 @@ export default function BillingClient() {
             "Not signed in (login first)."
           )}
         </div>
+
+        {/* ✅ Green subscribed message */}
+        {!loading && !checkingEntitlement && isSubscribed ? (
+          <div
+            style={{
+              marginTop: 12,
+              padding: 12,
+              borderRadius: 12,
+              background: "rgba(34, 197, 94, 0.18)",
+              border: "1px solid rgba(34, 197, 94, 0.45)",
+              color: "rgba(255,255,255,0.95)",
+              fontWeight: 900,
+            }}
+          >
+            ✅ You’re already subscribed
+          </div>
+        ) : null}
+
+        {/* Optional: show entitlement check state */}
+        {!loading && email && checkingEntitlement ? (
+          <div style={{ marginTop: 12, opacity: 0.9, fontSize: 13 }}>
+            Checking subscription…
+          </div>
+        ) : null}
 
         {msg ? (
           <div
@@ -161,8 +238,16 @@ export default function BillingClient() {
         ) : null}
 
         <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
-          <button onClick={goCheckout} disabled={loading} style={primaryBtn}>
-            {loading ? "Loading…" : "Subscribe"}
+          <button
+            onClick={goCheckout}
+            disabled={loading || checkingEntitlement}
+            style={primaryBtn}
+          >
+            {loading || checkingEntitlement
+              ? "Loading…"
+              : isSubscribed
+              ? "Go to Builder"
+              : "Subscribe"}
           </button>
 
           <button
@@ -207,7 +292,6 @@ const secondaryBtn: React.CSSProperties = {
   cursor: "pointer",
 };
 
-// ✅ smaller “link style” buttons for bottom-left
 const linkBtn: React.CSSProperties = {
   padding: "6px 8px",
   borderRadius: 10,
@@ -218,6 +302,8 @@ const linkBtn: React.CSSProperties = {
   fontSize: 12,
   cursor: "pointer",
 };
+
+
 
 
 
