@@ -12,16 +12,16 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
 // ✅ Always prefer the actual request origin first.
 // This prevents Stripe redirecting to a protected *.vercel.app domain.
 function getBaseUrl(req: NextRequest) {
-  // req.nextUrl.origin is the most reliable in Next middleware/runtime
+  // Most reliable
   const origin = req.nextUrl?.origin;
   if (origin) return origin;
 
-  // fallback to forwarded host (rare)
+  // Fallback to forwarded host
   const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
   const proto = req.headers.get("x-forwarded-proto") || "https";
   if (host) return `${proto}://${host}`;
 
-  // last resort: env
+  // Last resort: env
   const env =
     process.env.NEXT_PUBLIC_SITE_URL ||
     process.env.SITE_URL ||
@@ -30,6 +30,7 @@ function getBaseUrl(req: NextRequest) {
 
   if (env) return env.startsWith("http") ? env : `https://${env}`;
 
+  // Hard fallback
   return "https://www.forgesite.net";
 }
 
@@ -48,7 +49,10 @@ export async function POST(req: NextRequest) {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
     const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
     if (!supabaseUrl || !supabaseAnon) {
-      return NextResponse.json({ error: "Missing Supabase env vars" }, { status: 500 });
+      return NextResponse.json(
+        { error: "Missing Supabase env vars" },
+        { status: 500 }
+      );
     }
 
     // Validate JWT + get user
@@ -65,13 +69,16 @@ export async function POST(req: NextRequest) {
 
     const priceId = process.env.STRIPE_PRICE_ID || "";
     if (!priceId) {
-      return NextResponse.json({ error: "Missing STRIPE_PRICE_ID" }, { status: 500 });
+      return NextResponse.json(
+        { error: "Missing STRIPE_PRICE_ID" },
+        { status: 500 }
+      );
     }
 
     const base = getBaseUrl(req);
 
     // ✅ IMPORTANT: use your ACTUAL success page route
-    // (you have /billing/success, not /pro/success)
+    // You have /billing/success
     const successUrl =
       `${base}/billing/success?session_id={CHECKOUT_SESSION_ID}` +
       `&next=${encodeURIComponent(next)}`;
@@ -87,14 +94,19 @@ export async function POST(req: NextRequest) {
       client_reference_id: user.id,
       metadata: {
         user_id: user.id,
+        next,
       },
     });
 
     return NextResponse.json({ url: session.url }, { status: 200 });
   } catch (err: any) {
-    return NextResponse.json({ error: err?.message || "Checkout failed" }, { status: 500 });
+    return NextResponse.json(
+      { error: err?.message || "Checkout failed" },
+      { status: 500 }
+    );
   }
 }
+
 
 
 
