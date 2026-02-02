@@ -5,42 +5,86 @@ import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
-function isoFromUnixSeconds(sec?: number | null) {
-  if (!sec || typeof sec !== "number") return null;
-  return new Date(sec * 1000).toISOString();
+function jsonErr(message: string, status = 400) {
+  return NextResponse.json({ error: message }, { status });
 }
 
 async function resolveUserIdFromSession(
   supabaseAdmin: ReturnType<typeof getSupabaseAdmin>,
   session: Stripe.Checkout.Session
 ) {
-  // Preferred: metadata
-  const meta = (session.metadata || {}) as Record<string, string | undefined>;
+  // 1) Best: metadata set by your checkout route
+  const metaUser =
+    (session.metadata?.supabase_user_id || session.metadata?.user_id || "").trim() || "";
+  if (metaUser) return metaUser;
 
-  const userId =
-    (meta.supabase_user_id || "").trim() ||
-    (meta.user_id || "").trim() ||
-    (meta.uid || "").trim() ||
-    "";
+  // 2) Next: map from stripe_customer_id via your stripe_customers table
+  const customerId = String(session.customer || "").trim();
+  if (customerId) {
+    const { data } = await supabaseAdmin
+      .from("stripe_customers")
+      .select("user_id")
+      .eq("stripe_customer_id", customerId)
+      .maybeSingle();
 
-  if (userId) return userId;
+    if (data?.user_id) return String(data.user_id);
+  }
 
-  // Next best: client_reference_id (you set this in checkout route)
-  const crid = (session.client_reference_id || "").trim();
-  if (crid) return crid;
+  // 3) Last: map by email to profiles (ONLY if your app stores profiles by auth user_id and email)
+  const email =
+    (session.customer_details?.email || session.customer_email || "").toLowerCase().trim();
 
-  // Last resort: if you already store customer->user mapping
-  const customerId = String(session.customer || "");
-  if (!customerId) return null;
+  if (email) {
+    // If you have a profiles table that stores email, try it.
+    // If not, remove this block.
+    const { data } = await supabaseAdmin
+      .from("profiles")
+      .select("id")
+      .eq("email", email)
+      .maybeSingle();
 
-  const { data } = await supabaseAdmin
-    .from("stripe_customers")
-    .select("user_id")
-    .eq("stripe_customer_id", customerId)
-    .maybeSingle();
+    if ((data as any)?.id) return String((data as any).id);
+  }
 
-  return (data?.user_id as string | undefined) || null;
+  return null;
+}
+
+async function upsertEntitlementByUserId(params: {
+  supabaseAdmin: ReturnType<typeof getSupabaseAdmin>;
+  userId: string;
+  email: string | null;
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
+  status: string;
+  currentPeriodEnd: string | null;
+}) {
+  const {
+    supabaseAdmin,
+    userId,
+    email,
+    stripeCustomerId,
+    stripeSubscriptionId,
+    status,
+    currentPeriodEnd,
+  } = params;
+
+  // Upsert keyed by user_id so /api/entitlement can find it reliably
+  await supabaseAdmin
+    .from("entitlements")
+    .upsert(
+      {
+        user_id: userId,
+        email,
+        stripe_customer_id: stripeCustomerId,
+        stripe_subscription_id: stripeSubscriptionId,
+        status,
+        current_period_end: currentPeriodEnd,
+        updated_at: new Date().toISOString(),
+      } as any,
+      { onConflict: "user_id" }
+    );
 }
 
 export async function POST(req: Request) {
@@ -48,154 +92,115 @@ export async function POST(req: Request) {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
   if (!sig || !webhookSecret) {
-    return NextResponse.json(
-      { error: "Missing Stripe signature or webhook secret" },
-      { status: 400 }
-    );
+    return jsonErr("Missing Stripe signature or webhook secret", 400);
   }
 
-  // Stripe requires raw body for signature verification
+  // Stripe requires raw body
   const body = await req.text();
 
   let event: Stripe.Event;
-
   try {
     event = stripe.webhooks.constructEvent(body, sig, webhookSecret);
   } catch (err: any) {
-    return NextResponse.json(
-      { error: `Webhook Error: ${err?.message}` },
-      { status: 400 }
-    );
+    return jsonErr(`Webhook Error: ${err?.message}`, 400);
   }
 
   try {
     const supabaseAdmin = getSupabaseAdmin();
 
-    // ----------------------------
-    // 1) Checkout completed
-    // ----------------------------
+    // ===========================
+    // checkout.session.completed
+    // ===========================
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
 
-      const customerId = String(session.customer || "");
-      const subscriptionId = String(session.subscription || "");
-      const email = session.customer_details?.email?.toLowerCase() || null;
+      const stripeCustomerId = String(session.customer || "").trim() || null;
+      const stripeSubscriptionId = String(session.subscription || "").trim() || null;
+
+      const email =
+        (session.customer_details?.email || session.customer_email || "")
+          .toLowerCase()
+          .trim() || null;
 
       const userId = await resolveUserIdFromSession(supabaseAdmin, session);
 
-      // If we can't map the user, we can't entitle them.
-      // Return 200 so Stripe doesn't keep retrying forever,
-      // but you should inspect Stripe Events to see these cases.
-      if (!userId) {
-        return NextResponse.json({
-          received: true,
-          warning: "checkout.session.completed: missing user mapping",
-          customerId,
-          subscriptionId,
-          email,
-        });
-      }
-
-      // Keep a customer mapping table (optional but recommended)
-      if (customerId) {
-        await supabaseAdmin
-          .from("stripe_customers")
-          .upsert(
-            {
-              user_id: userId,
-              stripe_customer_id: customerId,
-              email,
-              updated_at: new Date().toISOString(),
-            } as any,
-            { onConflict: "stripe_customer_id" }
-          );
-      }
-
-      // Pull subscription for status + period end
-      let status: string | null = null;
+      // Pull subscription status + period end (if available)
+      let status = "active";
       let currentPeriodEnd: string | null = null;
 
-      if (subscriptionId) {
-        const sub = await stripe.subscriptions.retrieve(subscriptionId);
-        status = sub.status ?? null;
-        const cpe = (sub as any).current_period_end as number | undefined;
-        currentPeriodEnd = isoFromUnixSeconds(cpe);
+      if (stripeSubscriptionId) {
+        const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+        status = sub.status ?? "active";
+
+        const cpe = (sub as any).current_period_end;
+        currentPeriodEnd = cpe ? new Date(cpe * 1000).toISOString() : null;
       }
 
-      // ✅ Entitlements are keyed by *user_id* (this is what /api/entitlement checks)
-      await supabaseAdmin
-        .from("entitlements")
-        .upsert(
-          {
-            user_id: userId,
+      if (userId) {
+        await upsertEntitlementByUserId({
+          supabaseAdmin,
+          userId,
+          email,
+          stripeCustomerId,
+          stripeSubscriptionId,
+          status,
+          currentPeriodEnd,
+        });
+      } else {
+        // We cannot unlock without mapping to a user — store a breadcrumb to debug
+        await supabaseAdmin.from("last_error").insert({
+          scope: "stripe_webhook",
+          message: "checkout.session.completed but could not resolve user_id",
+          payload: {
+            stripeCustomerId,
+            stripeSubscriptionId,
             email,
-            stripe_customer_id: customerId || null,
-            stripe_subscription_id: subscriptionId || null,
-            status: status || "active",
-            current_period_end: currentPeriodEnd,
-            updated_at: new Date().toISOString(),
-          } as any,
-          { onConflict: "user_id" }
-        );
+            metadata: session.metadata || null,
+          },
+          created_at: new Date().toISOString(),
+        } as any);
+      }
     }
 
-    // ----------------------------
-    // 2) Subscription updated / deleted
-    // ----------------------------
+    // ======================================
+    // customer.subscription.updated/deleted
+    // ======================================
     if (
       event.type === "customer.subscription.updated" ||
       event.type === "customer.subscription.deleted"
     ) {
       const sub = event.data.object as Stripe.Subscription;
 
-      const customerId = String(sub.customer || "");
-      const subscriptionId = String(sub.id || "");
+      const stripeCustomerId = String(sub.customer || "").trim() || null;
+      const stripeSubscriptionId = String(sub.id || "").trim() || null;
       const status = sub.status ?? "canceled";
 
-      const cpe = (sub as any).current_period_end as number | undefined;
-      const currentPeriodEnd = isoFromUnixSeconds(cpe);
+      const cpe = (sub as any).current_period_end;
+      const currentPeriodEnd = cpe ? new Date(cpe * 1000).toISOString() : null;
 
-      // Map customer -> user_id (from stripe_customers table)
-      let userId: string | null = null;
-      if (customerId) {
+      if (stripeCustomerId) {
+        // Map customer -> user via stripe_customers table
+        const supabaseAdmin = getSupabaseAdmin();
         const { data } = await supabaseAdmin
           .from("stripe_customers")
-          .select("user_id")
-          .eq("stripe_customer_id", customerId)
+          .select("user_id, email")
+          .eq("stripe_customer_id", stripeCustomerId)
           .maybeSingle();
 
-        userId = (data?.user_id as string | undefined) || null;
-      }
+        const userId = data?.user_id ? String(data.user_id) : null;
+        const email = (data as any)?.email ? String((data as any).email) : null;
 
-      // If we can't map, still upsert by customer id as a fallback,
-      // but your /api/entitlement uses user_id, so mapping is best.
-      if (userId) {
-        await supabaseAdmin
-          .from("entitlements")
-          .upsert(
-            {
-              user_id: userId,
-              stripe_customer_id: customerId || null,
-              stripe_subscription_id: subscriptionId || null,
-              status,
-              current_period_end: currentPeriodEnd,
-              updated_at: new Date().toISOString(),
-            } as any,
-            { onConflict: "user_id" }
-          );
-      } else if (customerId) {
-        await supabaseAdmin
-          .from("entitlements")
-          .upsert(
-            {
-              stripe_customer_id: customerId,
-              stripe_subscription_id: subscriptionId || null,
-              status,
-              current_period_end: currentPeriodEnd,
-              updated_at: new Date().toISOString(),
-            } as any,
-            { onConflict: "stripe_customer_id" }
-          );
+        if (userId) {
+          await upsertEntitlementByUserId({
+            supabaseAdmin,
+            userId,
+            email,
+            stripeCustomerId,
+            stripeSubscriptionId,
+            status,
+            currentPeriodEnd,
+          });
+        }
       }
     }
 
@@ -207,4 +212,5 @@ export async function POST(req: Request) {
     );
   }
 }
+
 
