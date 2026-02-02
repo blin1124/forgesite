@@ -27,8 +27,18 @@ async function readResponse(res: Response) {
   return { text, json };
 }
 
+type EntitlementResult = {
+  ok: boolean;
+  active: boolean;
+  status?: string;
+  has_row?: boolean;
+  current_period_end?: string | null;
+  error?: string;
+  raw?: any;
+};
+
 // ✅ Step 2A helper: check entitlement and decide where to route
-async function checkEntitlementAndGate(token: string) {
+async function checkEntitlement(token: string): Promise<EntitlementResult> {
   const res = await fetch("/api/entitlement", {
     method: "GET",
     headers: { authorization: `Bearer ${token}` },
@@ -38,12 +48,28 @@ async function checkEntitlementAndGate(token: string) {
   const { text, json } = await readResponse(res);
 
   if (!res.ok) {
-    // treat any failure as not entitled
-    return { ok: false, active: false, error: json?.error || text || "Entitlement check failed" };
+    return {
+      ok: false,
+      active: false,
+      error: json?.error || text || "Entitlement check failed",
+      raw: json || text,
+    };
   }
 
   const active = Boolean(json?.active);
-  return { ok: true, active, status: String(json?.status || ""), error: "" };
+  return {
+    ok: Boolean(json?.ok),
+    active,
+    status: String(json?.status || ""),
+    has_row: Boolean(json?.has_row),
+    current_period_end: json?.current_period_end ?? null,
+    raw: json,
+  };
+}
+
+// small wait helper
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 export default function BuilderClient() {
@@ -77,8 +103,9 @@ export default function BuilderClient() {
 
   const canUseAI = useMemo(() => apiKey.trim().startsWith("sk-"), [apiKey]);
 
-  // ✅ Step 2A: access gating state
+  // ✅ access gating state
   const [checkingAccess, setCheckingAccess] = useState(true);
+  const [accessDenied, setAccessDenied] = useState(false);
 
   // force fresh loads when opening live URLs
   function withBust(url: string) {
@@ -111,6 +138,7 @@ export default function BuilderClient() {
     const run = async () => {
       setBusy("");
       setDebug("");
+      setAccessDenied(false);
       setCheckingAccess(true);
 
       try {
@@ -129,20 +157,43 @@ export default function BuilderClient() {
           return;
         }
 
-        // ✅ Entitlement check
-        const ent = await checkEntitlementAndGate(token);
+        // ✅ Entitlement check with a short retry
+        // Webhooks can be slightly delayed after checkout.
+        let ent = await checkEntitlement(token);
 
-        // Not active => send to billing (with next=/builder)
+        // If not active, retry a couple times quickly
         if (!ent.active) {
-          router.replace(`/billing?next=${encodeURIComponent("/builder")}`);
+          await sleep(900);
+          ent = await checkEntitlement(token);
+        }
+        if (!ent.active) {
+          await sleep(1200);
+          ent = await checkEntitlement(token);
+        }
+
+        // Still not active -> DO NOT instantly bounce (prevents flash loop)
+        if (!ent.active) {
+          setAccessDenied(true);
+
+          // Useful debug to show exactly what's happening
+          const msg =
+            `Not unlocked yet.\n` +
+            `status=${ent.status || "(none)"}\n` +
+            `has_row=${String(ent.has_row)}\n` +
+            `current_period_end=${String(ent.current_period_end)}\n` +
+            `error=${ent.error || ""}`;
+
+          setDebug(msg);
+
+          // show a button to go to billing
           return;
         }
 
         // ✅ Active => load builder data
         await refreshSites();
-      } catch {
-        // if anything weird happens, be safe and send to billing
-        router.replace(`/billing?next=${encodeURIComponent("/builder")}`);
+      } catch (e: any) {
+        setAccessDenied(true);
+        setDebug(e?.message || "Access check crashed");
         return;
       } finally {
         setCheckingAccess(false);
@@ -504,6 +555,70 @@ export default function BuilderClient() {
     );
   }
 
+  // ✅ If not entitled, show a stable screen (no redirect loop)
+  if (accessDenied) {
+    return (
+      <main
+        style={{
+          minHeight: "100vh",
+          display: "grid",
+          placeItems: "center",
+          padding: 24,
+          color: "white",
+          background:
+            "radial-gradient(1200px 600px at 20% 0%, rgba(255,255,255,0.18), transparent 60%), linear-gradient(135deg, rgb(124,58,237) 0%, rgb(109,40,217) 35%, rgb(91,33,182) 100%)",
+          fontFamily:
+            'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
+        }}
+      >
+        <div style={{ ...card, width: "min(760px, 92vw)" }}>
+          <div style={{ fontSize: 24, fontWeight: 900 }}>Subscription required</div>
+          <div style={{ marginTop: 10, opacity: 0.95, lineHeight: 1.4 }}>
+            Your account is not unlocked yet. If you just paid, wait ~10 seconds and try again.
+          </div>
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+            <button
+              style={primaryBtn}
+              onClick={() => window.location.reload()}
+            >
+              Retry access
+            </button>
+
+            <button
+              style={secondaryBtn}
+              onClick={() => router.replace(`/billing?next=${encodeURIComponent("/builder")}`)}
+            >
+              Go to Billing
+            </button>
+
+            <button style={secondaryBtn} onClick={logout}>
+              Log out
+            </button>
+          </div>
+
+          {debug ? (
+            <div
+              style={{
+                marginTop: 14,
+                padding: 12,
+                borderRadius: 12,
+                background: "rgba(0,0,0,0.18)",
+                border: "1px solid rgba(255,255,255,0.18)",
+                whiteSpace: "pre-wrap",
+                fontSize: 12,
+                opacity: 0.95,
+              }}
+            >
+              <div style={{ fontWeight: 900, marginBottom: 6 }}>Debug</div>
+              {debug}
+            </div>
+          ) : null}
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main
       style={{
@@ -571,7 +686,7 @@ export default function BuilderClient() {
 
             <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
               {sites.map((s) => {
-                const isBusy = publishingId === s.id;
+                const isBusyNow = publishingId === s.id;
                 const stamp = s.updated_at || s.created_at;
 
                 return (
@@ -590,14 +705,14 @@ export default function BuilderClient() {
                     </button>
 
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                      <button style={primaryBtn} onClick={() => publishSite(s.id)} disabled={isBusy}>
-                        {isBusy ? "Publishing…" : "Publish"}
+                      <button style={primaryBtn} onClick={() => publishSite(s.id)} disabled={isBusyNow}>
+                        {isBusyNow ? "Publishing…" : "Publish"}
                       </button>
 
                       <button
                         style={secondaryBtn}
                         onClick={() => router.push(`/domain?siteId=${encodeURIComponent(s.id)}`)}
-                        disabled={isBusy}
+                        disabled={isBusyNow}
                       >
                         Domain
                       </button>
@@ -608,12 +723,12 @@ export default function BuilderClient() {
                           const url = withBust(`/s/${encodeURIComponent(s.id)}`);
                           window.open(url, "_blank", "noopener,noreferrer");
                         }}
-                        disabled={isBusy}
+                        disabled={isBusyNow}
                       >
                         View
                       </button>
 
-                      <button style={dangerBtn} onClick={() => deleteSite(s.id)} disabled={isBusy}>
+                      <button style={dangerBtn} onClick={() => deleteSite(s.id)} disabled={isBusyNow}>
                         Delete
                       </button>
                     </div>
@@ -877,6 +992,8 @@ const dangerBtn: React.CSSProperties = {
   fontWeight: 900,
   cursor: "pointer",
 };
+
+
 
 
 
