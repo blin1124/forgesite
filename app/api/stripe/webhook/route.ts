@@ -4,6 +4,7 @@ import { stripe } from "@/lib/stripe";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   const sig = req.headers.get("stripe-signature");
@@ -33,7 +34,7 @@ export async function POST(req: Request) {
   try {
     const supabaseAdmin = getSupabaseAdmin();
 
-    // ✅ checkout completed (create entitlement)
+    // ✅ checkout completed (create/update entitlement)
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
 
@@ -41,37 +42,42 @@ export async function POST(req: Request) {
       const subscriptionId = String(session.subscription || "");
       const email = session.customer_details?.email?.toLowerCase() || null;
 
-      // recommended: set in /api/checkout metadata
-      const userId =
-        (session.metadata?.supabase_user_id || "").trim() || null;
+      // ✅ MUST match what we set in /api/stripe/checkout metadata
+      const userId = (session.metadata?.supabase_user_id || "").trim() || null;
+
+      // If Stripe hasn't attached these yet, don't write bad rows
+      if (!customerId || !subscriptionId) {
+        return NextResponse.json({ received: true, skipped: "missing ids" });
+      }
 
       // Pull subscription to get period end + status
       let status: string | null = null;
       let currentPeriodEnd: string | null = null;
 
-      if (subscriptionId) {
+      try {
         const sub = await stripe.subscriptions.retrieve(subscriptionId);
         status = sub.status ?? null;
         const cpe = (sub as any).current_period_end;
-        currentPeriodEnd = cpe
-          ? new Date(cpe * 1000).toISOString()
-          : null;
+        currentPeriodEnd = cpe ? new Date(cpe * 1000).toISOString() : null;
+      } catch {
+        // If subscription lookup fails, still write something sane
+        status = status || "active";
       }
+
+      // Only set user_id if we actually have it (prevents overwriting a good user_id with null)
+      const payload: Record<string, any> = {
+        email,
+        stripe_customer_id: customerId,
+        stripe_subscription_id: subscriptionId,
+        status: status || "active",
+        current_period_end: currentPeriodEnd,
+        updated_at: new Date().toISOString(),
+      };
+      if (userId) payload.user_id = userId;
 
       await supabaseAdmin
         .from("entitlements")
-        .upsert(
-          {
-            user_id: userId,
-            email,
-            stripe_customer_id: customerId,
-            stripe_subscription_id: subscriptionId,
-            status: status || "active",
-            current_period_end: currentPeriodEnd,
-            updated_at: new Date().toISOString(),
-          } as any,
-          { onConflict: "stripe_customer_id" }
-        );
+        .upsert(payload as any, { onConflict: "stripe_customer_id" });
     }
 
     // ✅ subscription updated/canceled (keep entitlement in sync)
@@ -85,10 +91,12 @@ export async function POST(req: Request) {
       const subscriptionId = String(sub.id || "");
       const status = sub.status ?? "canceled";
 
+      if (!customerId || !subscriptionId) {
+        return NextResponse.json({ received: true, skipped: "missing ids" });
+      }
+
       const cpe = (sub as any).current_period_end;
-      const currentPeriodEnd = cpe
-        ? new Date(cpe * 1000).toISOString()
-        : null;
+      const currentPeriodEnd = cpe ? new Date(cpe * 1000).toISOString() : null;
 
       await supabaseAdmin
         .from("entitlements")
@@ -104,6 +112,9 @@ export async function POST(req: Request) {
         );
     }
 
+    // (Optional) handle invoice.payment_failed if you want to mark status past_due
+    // if (event.type === "invoice.payment_failed") { ... }
+
     return NextResponse.json({ received: true });
   } catch (err: any) {
     return NextResponse.json(
@@ -112,6 +123,7 @@ export async function POST(req: Request) {
     );
   }
 }
+
 
 
 
