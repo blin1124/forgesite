@@ -7,8 +7,20 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-function jsonErr(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status });
+function jsonErr(message: string, status = 400, extra?: any) {
+  return NextResponse.json({ ok: false, error: message, ...extra }, { status });
+}
+
+function normalizeStatus(s: any) {
+  return String(s || "").trim().toLowerCase();
+}
+
+function isActiveStatus(status: string) {
+  // Stripe-like statuses you likely care about:
+  // active, trialing
+  // optional: past_due (if you want to allow grace period, uncomment)
+  return status === "active" || status === "trialing";
+  // || status === "past_due";
 }
 
 export async function GET(req: Request) {
@@ -28,28 +40,38 @@ export async function GET(req: Request) {
 
     if (userErr || !user) return jsonErr("Invalid session", 401);
 
-    // ✅ Fetch entitlement row
+    // ✅ Fetch entitlement row (by user_id)
     const { data: ent, error: entErr } = await admin
       .from("entitlements")
-      .select("status, current_period_end")
+      .select("status, current_period_end, stripe_customer_id, stripe_subscription_id")
       .eq("user_id", user.id)
       .maybeSingle();
 
     if (entErr) return jsonErr(entErr.message, 500);
 
-    const status = (ent?.status as string | null) || "inactive";
+    const status = normalizeStatus(ent?.status || "inactive");
+    const active = isActiveStatus(status);
 
     return NextResponse.json({
       ok: true,
       user_id: user.id,
-      status,
+      email: user.email || null,
+
+      // helpful debugging
+      has_row: Boolean(ent),
+      status, // normalized
+      raw_status: ent?.status ?? null,
       current_period_end: ent?.current_period_end ?? null,
-      active: status === "active" || status === "trialing",
+      stripe_customer_id: ent?.stripe_customer_id ?? null,
+      stripe_subscription_id: ent?.stripe_subscription_id ?? null,
+
+      active,
     });
   } catch (err: any) {
     return jsonErr(err?.message || "Entitlement route crashed", 500);
   }
 }
+
 
 
 
