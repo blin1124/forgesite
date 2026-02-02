@@ -9,19 +9,15 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
   apiVersion: "2025-12-15.clover",
 });
 
-// ✅ Always prefer the actual request origin first.
-// This prevents Stripe redirecting to a protected *.vercel.app domain.
+// ✅ Prefer request origin to avoid redirecting to *.vercel.app
 function getBaseUrl(req: NextRequest) {
-  // Most reliable
   const origin = req.nextUrl?.origin;
   if (origin) return origin;
 
-  // Fallback to forwarded host
   const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
   const proto = req.headers.get("x-forwarded-proto") || "https";
   if (host) return `${proto}://${host}`;
 
-  // Last resort: env
   const env =
     process.env.NEXT_PUBLIC_SITE_URL ||
     process.env.SITE_URL ||
@@ -30,7 +26,6 @@ function getBaseUrl(req: NextRequest) {
 
   if (env) return env.startsWith("http") ? env : `https://${env}`;
 
-  // Hard fallback
   return "https://www.forgesite.net";
 }
 
@@ -77,10 +72,9 @@ export async function POST(req: NextRequest) {
 
     const base = getBaseUrl(req);
 
-    // ✅ IMPORTANT: use your ACTUAL success page route
-    // You have /billing/success
+    // ✅ Use your existing /pro/success flow
     const successUrl =
-      `${base}/billing/success?session_id={CHECKOUT_SESSION_ID}` +
+      `${base}/pro/success?session_id={CHECKOUT_SESSION_ID}` +
       `&next=${encodeURIComponent(next)}`;
 
     const cancelUrl = `${base}/billing?next=${encodeURIComponent(next)}`;
@@ -93,7 +87,8 @@ export async function POST(req: NextRequest) {
       customer_email: user.email || undefined,
       client_reference_id: user.id,
       metadata: {
-        user_id: user.id,
+        // ✅ MUST match webhook + confirm route
+        supabase_user_id: user.id,
         next,
       },
     });
@@ -106,6 +101,7 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+
 
 
 
