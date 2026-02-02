@@ -28,19 +28,24 @@ function toApex(host: string) {
 }
 
 function isBypassPath(pathname: string) {
-  // Don’t rewrite these routes (app pages + your legal pages)
+  // Don’t rewrite these routes (app pages + auth + billing + legal)
   return (
     pathname.startsWith("/api") ||
     pathname.startsWith("/login") ||
     pathname.startsWith("/signup") ||
     pathname.startsWith("/billing") ||
+    pathname.startsWith("/billing/success") ||
+    pathname.startsWith("/pro") ||               // ✅ your success page lives here
     pathname.startsWith("/builder") ||
     pathname.startsWith("/domain") ||
     pathname.startsWith("/account") ||
     pathname.startsWith("/settings") ||
     pathname.startsWith("/_hosted") ||
+    pathname.startsWith("/auth") ||              // ✅ supabase callbacks (common)
     pathname.startsWith("/privacy") ||
-    pathname.startsWith("/terms") // ✅ add this to be safe
+    pathname.startsWith("/terms") ||
+    pathname.startsWith("/favicon") ||
+    pathname.startsWith("/robots")
   );
 }
 
@@ -117,6 +122,7 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 }
+
 
 
 
