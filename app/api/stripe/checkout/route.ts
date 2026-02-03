@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import Stripe from "stripe";
-import { createClient } from "@supabase/supabase-js";
+import { stripe } from "@/lib/stripe";
+import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-  apiVersion: "2025-12-15.clover",
-});
-
-// ✅ Prefer request origin to avoid redirecting to *.vercel.app
+// ✅ Prefer the real request origin first (prevents wrong domain redirects)
 function getBaseUrl(req: NextRequest) {
   const origin = req.nextUrl?.origin;
   if (origin) return origin;
@@ -19,6 +16,7 @@ function getBaseUrl(req: NextRequest) {
   if (host) return `${proto}://${host}`;
 
   const env =
+    process.env.NEXT_PUBLIC_APP_URL ||
     process.env.NEXT_PUBLIC_SITE_URL ||
     process.env.SITE_URL ||
     process.env.VERCEL_PROJECT_PRODUCTION_URL ||
@@ -29,72 +27,80 @@ function getBaseUrl(req: NextRequest) {
   return "https://www.forgesite.net";
 }
 
+function jsonErr(message: string, status = 400) {
+  return NextResponse.json({ error: message }, { status });
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const auth = req.headers.get("authorization") || "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    // ✅ Expect token from client
+    const authHeader = req.headers.get("authorization") || "";
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice("Bearer ".length).trim()
+      : "";
 
-    if (!token) {
-      return NextResponse.json({ error: "Missing auth token" }, { status: 401 });
-    }
+    if (!token) return jsonErr("Auth session missing", 401);
 
+    // ✅ Validate user using service role client
+    const supabaseAdmin = getSupabaseAdmin();
+    const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
+    const user = userData?.user;
+
+    if (userErr || !user) return jsonErr("Invalid session", 401);
+
+    // allow passing "next" from BillingClient, fallback /builder
     const body = await req.json().catch(() => ({}));
     const next = typeof body?.next === "string" ? body.next : "/builder";
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-    const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-    if (!supabaseUrl || !supabaseAnon) {
-      return NextResponse.json(
-        { error: "Missing Supabase env vars" },
-        { status: 500 }
-      );
-    }
-
-    // Validate JWT + get user
-    const supabase = createClient(supabaseUrl, supabaseAnon, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    });
-
-    const { data: userRes, error: userErr } = await supabase.auth.getUser();
-    if (userErr || !userRes?.user) {
-      return NextResponse.json({ error: "Invalid session" }, { status: 401 });
-    }
-
-    const user = userRes.user;
-
-    const priceId = process.env.STRIPE_PRICE_ID || "";
-    if (!priceId) {
-      return NextResponse.json(
-        { error: "Missing STRIPE_PRICE_ID" },
-        { status: 500 }
-      );
-    }
+    const priceId = (process.env.STRIPE_PRICE_ID || "").trim();
+    if (!priceId) return jsonErr("Missing STRIPE_PRICE_ID", 500);
 
     const base = getBaseUrl(req);
 
-    // ✅ Use your existing /pro/success flow
     const successUrl =
       `${base}/pro/success?session_id={CHECKOUT_SESSION_ID}` +
       `&next=${encodeURIComponent(next)}`;
 
     const cancelUrl = `${base}/billing?next=${encodeURIComponent(next)}`;
 
+    // ✅ Reuse existing Stripe customer if stored
+    let existingCustomerId: string | null = null;
+    try {
+      const { data: row } = await supabaseAdmin
+        .from("stripe_customers")
+        .select("stripe_customer_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (row?.stripe_customer_id) existingCustomerId = String(row.stripe_customer_id);
+    } catch {
+      existingCustomerId = null;
+    }
+
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
+
+      ...(existingCustomerId
+        ? { customer: existingCustomerId }
+        : { customer_email: user.email ?? undefined }),
+
+      client_reference_id: user.id,
+
+      // 🔥 webhook unlock depends on this
+      metadata: {
+        supabase_user_id: user.id,
+        supabase_email: user.email ?? "",
+        next_path: next,
+      },
+
       success_url: successUrl,
       cancel_url: cancelUrl,
-      customer_email: user.email || undefined,
-      client_reference_id: user.id,
-      metadata: {
-        // ✅ MUST match webhook + confirm route
-        supabase_user_id: user.id,
-        next,
-      },
     });
 
     return NextResponse.json({ url: session.url }, { status: 200 });
   } catch (err: any) {
+    console.error("Stripe checkout error:", err);
     return NextResponse.json(
       { error: err?.message || "Checkout failed" },
       { status: 500 }
