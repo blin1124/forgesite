@@ -9,16 +9,15 @@ type EntitlementResp = {
   active?: boolean;
   status?: string | null;
   current_period_end?: string | null;
-  has_row?: boolean;
   error?: string;
 };
 
 async function safeJson(res: Response) {
   const text = await res.text();
   try {
-    return { ok: true, json: JSON.parse(text), text };
+    return { ok: res.ok, status: res.status, json: JSON.parse(text), text };
   } catch {
-    return { ok: false, json: null, text };
+    return { ok: res.ok, status: res.status, json: null as any, text };
   }
 }
 
@@ -27,7 +26,6 @@ export default function BillingClient() {
   const sp = useSearchParams();
 
   const next = useMemo(() => sp.get("next") || "/builder", [sp]);
-  const sessionId = useMemo(() => sp.get("session_id") || "", [sp]);
 
   const [email, setEmail] = useState<string | null>(null);
   const [token, setToken] = useState<string>("");
@@ -37,76 +35,6 @@ export default function BillingClient() {
 
   const [checkingEntitlement, setCheckingEntitlement] = useState(false);
   const [isSubscribed, setIsSubscribed] = useState(false);
-
-  // extra debug so you can see why it says “not subscribed”
-  const [entDebug, setEntDebug] = useState<EntitlementResp | null>(null);
-
-  async function checkEntitlement(tk: string) {
-    setCheckingEntitlement(true);
-    try {
-      const r = await fetch("/api/entitlement", {
-        method: "GET",
-        headers: { authorization: `Bearer ${tk}` },
-        cache: "no-store",
-      });
-
-      const data = (await r.json().catch(() => ({}))) as EntitlementResp;
-
-      setEntDebug(data);
-
-      if (r.ok && data?.active === true) {
-        setIsSubscribed(true);
-        return true;
-      } else {
-        setIsSubscribed(false);
-        return false;
-      }
-    } catch (e: any) {
-      setEntDebug({ ok: false, active: false, status: "inactive", error: e?.message || "entitlement crashed" });
-      setIsSubscribed(false);
-      return false;
-    } finally {
-      setCheckingEntitlement(false);
-    }
-  }
-
-  // ✅ NEW: if we have a Stripe session_id in URL, try to finalize it
-  async function finalizeIfReturningFromStripe(tk: string) {
-    if (!sessionId) return false;
-
-    setMsg("Finalizing your subscription…");
-    try {
-      const r = await fetch("/api/stripe/confirm", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId }),
-      });
-
-      const { ok: isJson, json, text } = await safeJson(r);
-
-      if (!r.ok) {
-        setMsg(
-          (isJson ? json?.error : text) ||
-            `Could not finalize subscription (${r.status}).`
-        );
-        return false;
-      }
-
-      // now re-check entitlement
-      const active = await checkEntitlement(tk);
-      if (active) {
-        setMsg("Unlocked ✅ Redirecting…");
-        router.replace(next);
-        return true;
-      }
-
-      setMsg("Payment received, but access is still syncing. Try again in a moment.");
-      return false;
-    } catch (e: any) {
-      setMsg(e?.message || "Finalize failed");
-      return false;
-    }
-  }
 
   useEffect(() => {
     const run = async () => {
@@ -118,26 +46,30 @@ export default function BillingClient() {
           setEmail(null);
           setToken("");
           setIsSubscribed(false);
-          return;
+        } else {
+          const em = data?.session?.user?.email ?? null;
+          const tk = data?.session?.access_token ?? "";
+          setEmail(em);
+          setToken(tk);
+
+          if (tk) {
+            setCheckingEntitlement(true);
+            try {
+              const r = await fetch("/api/entitlement", {
+                method: "GET",
+                headers: { authorization: `Bearer ${tk}` },
+                cache: "no-store",
+              });
+
+              const j = (await r.json()) as EntitlementResp;
+              setIsSubscribed(Boolean(r.ok && j?.active === true));
+            } catch {
+              setIsSubscribed(false);
+            } finally {
+              setCheckingEntitlement(false);
+            }
+          }
         }
-
-        const em = data?.session?.user?.email ?? null;
-        const tk = data?.session?.access_token ?? "";
-
-        setEmail(em);
-        setToken(tk);
-
-        if (!tk) {
-          setIsSubscribed(false);
-          return;
-        }
-
-        // ✅ If returning from Stripe, try finalize first (then redirect)
-        const finalized = await finalizeIfReturningFromStripe(tk);
-        if (finalized) return;
-
-        // otherwise just check entitlement normally
-        await checkEntitlement(tk);
       } catch {
         setEmail(null);
         setToken("");
@@ -148,8 +80,7 @@ export default function BillingClient() {
     };
 
     run();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, []);
 
   async function goCheckout() {
     setMsg("");
@@ -164,7 +95,6 @@ export default function BillingClient() {
         return;
       }
 
-      // ✅ If already subscribed, go where they were headed
       if (isSubscribed) {
         router.push(next);
         return;
@@ -179,22 +109,48 @@ export default function BillingClient() {
         body: JSON.stringify({ next }),
       });
 
-      const text = await res.text();
-      let data: any = {};
-      try {
-        data = JSON.parse(text);
-      } catch {
-        throw new Error(
-          `Checkout response not JSON (${res.status}). ${text.slice(0, 180)}`
-        );
-      }
+      const { ok, status, json, text } = await safeJson(res);
 
-      if (!res.ok) throw new Error(data?.error || `Checkout failed (${res.status})`);
-      if (!data?.url) throw new Error("Checkout succeeded but returned no url");
+      if (!ok) throw new Error(json?.error || `Checkout failed (${status}): ${text.slice(0, 180)}`);
+      if (!json?.url) throw new Error("Checkout succeeded but returned no url");
 
-      window.location.href = data.url;
+      window.location.href = json.url;
     } catch (e: any) {
       setMsg(e?.message || "Checkout failed");
+    }
+  }
+
+  async function openPortal() {
+    setMsg("");
+
+    try {
+      if (!token) {
+        router.push(
+          `/login?next=${encodeURIComponent(
+            `/billing?next=${encodeURIComponent(next)}`
+          )}`
+        );
+        return;
+      }
+
+      const res = await fetch("/api/stripe/portal", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        // return back to billing after portal actions
+        body: JSON.stringify({ returnTo: `/billing?next=${encodeURIComponent(next)}` }),
+      });
+
+      const { ok, status, json, text } = await safeJson(res);
+
+      if (!ok) throw new Error(json?.error || `Portal failed (${status}): ${text.slice(0, 180)}`);
+      if (!json?.url) throw new Error("Portal succeeded but returned no url");
+
+      window.location.href = json.url;
+    } catch (e: any) {
+      setMsg(e?.message || "Could not open subscription portal");
     }
   }
 
@@ -246,29 +202,18 @@ export default function BillingClient() {
           boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
         }}
       >
-        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 900 }}>
-          ForgeSite Billing
-        </h1>
+        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 900 }}>ForgeSite Billing</h1>
 
         {showSubscribeLine ? (
           <p style={{ marginTop: 8, opacity: 0.9 }}>
-            Subscribe to access the Builder. After payment you’ll return to:{" "}
-            <b>{next}</b>
+            Subscribe to access the Builder. After payment you’ll return to: <b>{next}</b>
           </p>
         ) : (
           <div style={{ height: 10 }} />
         )}
 
         <div style={{ marginTop: 12, opacity: 0.9, fontSize: 14 }}>
-          {loading ? (
-            "Checking session…"
-          ) : email ? (
-            <>
-              Signed in as <b>{email}</b>
-            </>
-          ) : (
-            "Not signed in (login first)."
-          )}
+          {loading ? "Checking session…" : email ? <>Signed in as <b>{email}</b></> : "Not signed in (login first)."}
         </div>
 
         {!loading && !checkingEntitlement && isSubscribed ? (
@@ -299,8 +244,8 @@ export default function BillingClient() {
               marginTop: 12,
               padding: 12,
               borderRadius: 12,
-              background: "rgba(0,0,0,0.22)",
-              border: "1px solid rgba(255,255,255,0.14)",
+              background: "rgba(185, 28, 28, .25)",
+              border: "1px solid rgba(185, 28, 28, .5)",
               whiteSpace: "pre-wrap",
             }}
           >
@@ -308,37 +253,21 @@ export default function BillingClient() {
           </div>
         ) : null}
 
-        {/* optional debug */}
-        {!loading && entDebug ? (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              borderRadius: 12,
-              background: "rgba(0,0,0,0.18)",
-              border: "1px solid rgba(255,255,255,0.14)",
-              fontSize: 12,
-              opacity: 0.95,
-              whiteSpace: "pre-wrap",
-            }}
-          >
-            <div style={{ fontWeight: 900, marginBottom: 6 }}>Entitlement debug</div>
-            {`active=${String(entDebug.active ?? false)}
-status=${String(entDebug.status ?? "inactive")}
-has_row=${String(entDebug.has_row ?? false)}
-current_period_end=${String(entDebug.current_period_end ?? null)}
-error=${entDebug.error ?? ""}`}
-          </div>
-        ) : null}
-
         <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
-          <button onClick={goCheckout} disabled={loading || checkingEntitlement} style={primaryBtn}>
-            {loading || checkingEntitlement
-              ? "Loading…"
-              : isSubscribed
-              ? "Go to Builder"
-              : "Subscribe"}
+          <button
+            onClick={goCheckout}
+            disabled={loading || checkingEntitlement}
+            style={primaryBtn}
+          >
+            {loading || checkingEntitlement ? "Loading…" : isSubscribed ? "Go to Builder" : "Subscribe"}
           </button>
+
+          {/* ✅ Only show portal button when subscribed */}
+          {(!loading && !checkingEntitlement && isSubscribed) ? (
+            <button onClick={openPortal} style={secondaryBtn}>
+              Manage Subscription (Cancel anytime)
+            </button>
+          ) : null}
 
           <button
             onClick={() =>
@@ -352,20 +281,6 @@ error=${entDebug.error ?? ""}`}
           >
             Back to login
           </button>
-
-          {/* ✅ Only show direct “Go to Builder” when subscribed */}
-          {isSubscribed ? (
-            <button onClick={() => router.push(next)} style={secondaryBtn}>
-              Go to Builder
-            </button>
-          ) : null}
-
-          {/* ✅ Manual retry */}
-          {!loading && token ? (
-            <button onClick={() => checkEntitlement(token)} style={secondaryBtn}>
-              Retry access
-            </button>
-          ) : null}
         </div>
       </div>
     </main>
@@ -402,6 +317,8 @@ const linkBtn: React.CSSProperties = {
   fontSize: 12,
   cursor: "pointer",
 };
+
+
 
 
 
