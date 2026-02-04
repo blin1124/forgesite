@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { stripe } from "@/lib/stripe";
+import Stripe from "stripe";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Prefer request origin so it returns to the correct domain
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
+  apiVersion: "2025-12-15.clover",
+});
+
+// prefer real request origin
 function getBaseUrl(req: NextRequest) {
   const origin = req.nextUrl?.origin;
   if (origin) return origin;
@@ -22,37 +26,58 @@ function getBaseUrl(req: NextRequest) {
     process.env.VERCEL_URL;
 
   if (env) return env.startsWith("http") ? env : `https://${env}`;
+
   return "https://www.forgesite.net";
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const authHeader = req.headers.get("authorization") || "";
-    const token = authHeader.startsWith("Bearer ")
-      ? authHeader.slice("Bearer ".length).trim()
-      : "";
+    const auth = req.headers.get("authorization") || "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
 
-    if (!token) return NextResponse.json({ error: "Auth session missing" }, { status: 401 });
+    if (!token) {
+      return NextResponse.json({ error: "Auth session missing" }, { status: 401 });
+    }
 
     const supabaseAdmin = getSupabaseAdmin();
     const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
     const user = userData?.user;
 
-    if (userErr || !user) return NextResponse.json({ error: "Invalid session" }, { status: 401 });
+    if (userErr || !user) {
+      return NextResponse.json({ error: "Invalid session" }, { status: 401 });
+    }
 
     const body = await req.json().catch(() => ({}));
     const returnTo = typeof body?.returnTo === "string" ? body.returnTo : "/billing";
 
-    // You store this mapping in stripe_customers
-    const { data: row, error: rowErr } = await supabaseAdmin
-      .from("stripe_customers")
-      .select("stripe_customer_id")
-      .eq("user_id", user.id)
-      .maybeSingle();
+    const base = getBaseUrl(req);
+    const return_url = `${base}${returnTo.startsWith("/") ? returnTo : `/${returnTo}`}`;
 
-    if (rowErr) return NextResponse.json({ error: rowErr.message }, { status: 500 });
+    // 1) Try your DB mapping first (recommended)
+    let customerId: string | null = null;
 
-    const customerId = row?.stripe_customer_id ? String(row.stripe_customer_id) : "";
+    try {
+      const { data: row } = await supabaseAdmin
+        .from("stripe_customers")
+        .select("stripe_customer_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (row?.stripe_customer_id) customerId = String(row.stripe_customer_id);
+    } catch {
+      // ignore if table missing
+    }
+
+    // 2) Fallback: search Stripe by email (only if needed)
+    if (!customerId && user.email) {
+      const list = await stripe.customers.list({
+        email: user.email,
+        limit: 1,
+      });
+
+      if (list.data?.[0]?.id) customerId = list.data[0].id;
+    }
+
     if (!customerId) {
       return NextResponse.json(
         { error: "No Stripe customer found for this account yet." },
@@ -60,18 +85,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const base = getBaseUrl(req);
-    const portal = await stripe.billingPortal.sessions.create({
+    // Stripe Customer Portal session
+    const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
-      return_url: `${base}${returnTo.startsWith("/") ? returnTo : `/${returnTo}`}`,
+      return_url,
     });
 
-    return NextResponse.json({ url: portal.url }, { status: 200 });
+    return NextResponse.json({ url: session.url }, { status: 200 });
   } catch (err: any) {
     console.error("Portal error:", err);
-    return NextResponse.json({ error: err?.message || "Portal failed" }, { status: 500 });
+    return NextResponse.json(
+      { error: err?.message || "Portal failed" },
+      { status: 500 }
+    );
   }
 }
+
 
 
 
