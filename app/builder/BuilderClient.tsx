@@ -184,7 +184,10 @@ export default function BuilderClient() {
     try {
       const res = await fetch("/api/sites/list", { cache: "no-store" });
       const { text, json } = await readResponse(res);
-      if (!res.ok) throw new Error(json?.error || `List failed (${res.status}): ${text.slice(0, 200)}`);
+      if (!res.ok)
+        throw new Error(
+          json?.error || `List failed (${res.status}): ${text.slice(0, 200)}`
+        );
       setSites(Array.isArray(json?.sites) ? json.sites : []);
     } catch (e: any) {
       setDebug(e?.message || "Failed to list sites");
@@ -224,7 +227,10 @@ export default function BuilderClient() {
       });
 
       const { text, json } = await readResponse(res);
-      if (!res.ok) throw new Error(json?.error || `Generate failed (${res.status}): ${text.slice(0, 240)}`);
+      if (!res.ok)
+        throw new Error(
+          json?.error || `Generate failed (${res.status}): ${text.slice(0, 240)}`
+        );
 
       const nextHtml = String(json?.html || "");
       if (!nextHtml.trim()) throw new Error("Generate returned empty HTML.");
@@ -262,7 +268,10 @@ export default function BuilderClient() {
       });
 
       const { text, json } = await readResponse(res);
-      if (!res.ok) throw new Error(json?.error || `Save failed (${res.status}): ${text.slice(0, 240)}`);
+      if (!res.ok)
+        throw new Error(
+          json?.error || `Save failed (${res.status}): ${text.slice(0, 240)}`
+        );
 
       const newId = String(json?.id || "");
       if (newId) setSelectedId(newId);
@@ -294,13 +303,17 @@ export default function BuilderClient() {
       const res = await fetch("/api/upload", { method: "POST", body: form });
       const { text, json } = await readResponse(res);
 
-      if (!res.ok) throw new Error(json?.error || `Upload failed (${res.status}): ${text.slice(0, 240)}`);
+      if (!res.ok)
+        throw new Error(
+          json?.error || `Upload failed (${res.status}): ${text.slice(0, 240)}`
+        );
 
       const u = String(json?.file_url || json?.url || "");
       const m = String(json?.file_mime || json?.mime || file.type || "");
       const n = String(json?.file_name || json?.name || file.name || "");
 
-      if (!u.startsWith("http")) throw new Error(`Upload returned invalid file_url: ${u || "(empty)"}`);
+      if (!u.startsWith("http"))
+        throw new Error(`Upload returned invalid file_url: ${u || "(empty)"}`);
 
       setFileUrl(u);
       setFileMime(m);
@@ -327,9 +340,13 @@ export default function BuilderClient() {
     setDebug("");
 
     if (!canUseAI) return setBusy("Paste your OpenAI key first.");
-    if (!chatInput.trim() && !fileUrl) return setBusy("Type a message or upload a file.");
+    if (!chatInput.trim() && !fileUrl)
+      return setBusy("Type a message or upload a file.");
 
-    const userMsg: ChatMsg = { role: "user", content: chatInput.trim() || "(file attached)" };
+    const userMsg: ChatMsg = {
+      role: "user",
+      content: chatInput.trim() || "(file attached)",
+    };
     const nextHistory = [...history, userMsg];
 
     setHistory(nextHistory);
@@ -353,7 +370,10 @@ export default function BuilderClient() {
       });
 
       const { text, json } = await readResponse(res);
-      if (!res.ok) throw new Error(json?.error || `Chat failed (${res.status}): ${text.slice(0, 240)}`);
+      if (!res.ok)
+        throw new Error(
+          json?.error || `Chat failed (${res.status}): ${text.slice(0, 240)}`
+        );
 
       const reply = String(json?.reply || "OK");
       const prompt_update = String(json?.prompt_update || prompt);
@@ -375,7 +395,10 @@ export default function BuilderClient() {
     let openUrl = `/s/${encodeURIComponent(siteId)}`;
 
     try {
-      const dres = await fetch(`/api/sites/${encodeURIComponent(siteId)}/domain`, { cache: "no-store" });
+      const dres = await fetch(
+        `/api/sites/${encodeURIComponent(siteId)}/domain`,
+        { cache: "no-store" }
+      );
       const { json: djson } = await readResponse(dres);
 
       const domainRaw = String(djson?.domain || "").trim();
@@ -412,16 +435,22 @@ export default function BuilderClient() {
 
       setBusy("Publishing…");
 
-      const res = await fetch(`/api/sites/${encodeURIComponent(siteId)}/publish`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${token}`,
-        },
-      });
+      const res = await fetch(
+        `/api/sites/${encodeURIComponent(siteId)}/publish`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${token}`,
+          },
+        }
+      );
 
       const { text, json } = await readResponse(res);
-      if (!res.ok) throw new Error(json?.error || `Publish failed (${res.status}): ${text.slice(0, 240)}`);
+      if (!res.ok)
+        throw new Error(
+          json?.error || `Publish failed (${res.status}): ${text.slice(0, 240)}`
+        );
 
       await refreshSites();
 
@@ -459,13 +488,19 @@ export default function BuilderClient() {
         return;
       }
 
-      const res = await fetch(`/api/sites/${encodeURIComponent(siteId)}/delete`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${token}` },
-      });
+      const res = await fetch(
+        `/api/sites/${encodeURIComponent(siteId)}/delete`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}` },
+        }
+      );
 
       const { text, json } = await readResponse(res);
-      if (!res.ok) throw new Error(json?.error || `Delete failed (${res.status}): ${text.slice(0, 240)}`);
+      if (!res.ok)
+        throw new Error(
+          json?.error || `Delete failed (${res.status}): ${text.slice(0, 240)}`
+        );
 
       if (selectedId === siteId) {
         setSelectedId(null);
@@ -515,7 +550,9 @@ export default function BuilderClient() {
       >
         <div style={{ ...card, width: "min(720px, 92vw)", textAlign: "center" }}>
           <div style={{ fontSize: 22, fontWeight: 900 }}>Loading Builder…</div>
-          <div style={{ marginTop: 10, opacity: 0.9 }}>Checking subscription status.</div>
+          <div style={{ marginTop: 10, opacity: 0.9 }}>
+            Checking subscription status.
+          </div>
         </div>
       </main>
     );
@@ -537,16 +574,29 @@ export default function BuilderClient() {
         }}
       >
         <div style={{ ...card, width: "min(720px, 92vw)" }}>
-          <div style={{ fontSize: 26, fontWeight: 900 }}>Subscription required</div>
+          <div style={{ fontSize: 26, fontWeight: 900 }}>
+            Subscription required
+          </div>
           <div style={{ marginTop: 8, opacity: 0.9 }}>
-            Your account isn’t unlocked yet. If you just paid, try again in a few seconds.
+            Your account isn’t unlocked yet. If you just paid, try again in a few
+            seconds.
           </div>
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 10,
+              flexWrap: "wrap",
+              marginTop: 14,
+            }}
+          >
             <button style={primaryBtn} onClick={() => loadAccessAndData()}>
               Retry access
             </button>
-            <button style={secondaryBtn} onClick={() => router.push("/billing?next=%2Fbuilder")}>
+            <button
+              style={secondaryBtn}
+              onClick={() => router.push("/billing?next=%2Fbuilder")}
+            >
               Go to Billing
             </button>
             <button style={secondaryBtn} onClick={logout}>
@@ -554,7 +604,7 @@ export default function BuilderClient() {
             </button>
           </div>
 
-          {/* ✅ Removed dev/debug block here to keep it clean for customers */}
+          {/* ✅ CLEAN: no dev debug block; only show a short error if we have one */}
           {gateDebug?.error ? (
             <div style={{ marginTop: 12, opacity: 0.85, fontSize: 13 }}>
               {String(gateDebug.error).slice(0, 180)}
@@ -580,9 +630,18 @@ export default function BuilderClient() {
           'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
       }}
     >
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+      <header
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 12,
+        }}
+      >
         <div>
-          <div style={{ fontSize: 44, fontWeight: 900, lineHeight: 1 }}>Builder</div>
+          <div style={{ fontSize: 44, fontWeight: 900, lineHeight: 1 }}>
+            Builder
+          </div>
           <div style={{ opacity: 0.9 }}>
             Signed in as <b>{email || "unknown"}</b>
           </div>
@@ -604,14 +663,29 @@ export default function BuilderClient() {
         </div>
       </header>
 
-      <div style={{ display: "grid", gridTemplateColumns: "420px 1fr", gap: 14, marginTop: 14 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "420px 1fr",
+          gap: 14,
+          marginTop: 14,
+        }}
+      >
         {/* LEFT */}
         <div style={{ display: "grid", gap: 14 }}>
           <section style={card}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
               <div>
                 <div style={{ fontSize: 18, fontWeight: 900 }}>My Sites</div>
-                <div style={{ opacity: 0.85, fontSize: 13 }}>{sites.length} site(s)</div>
+                <div style={{ opacity: 0.85, fontSize: 13 }}>
+                  {sites.length} site(s)
+                </div>
               </div>
               <button
                 style={smallBtn}
@@ -644,23 +718,35 @@ export default function BuilderClient() {
                       onClick={() => loadSite(s.id)}
                       style={{
                         ...siteBtn,
-                        borderColor: selectedId === s.id ? "rgba(255,255,255,0.65)" : "rgba(255,255,255,0.18)",
+                        borderColor:
+                          selectedId === s.id
+                            ? "rgba(255,255,255,0.65)"
+                            : "rgba(255,255,255,0.18)",
                       }}
                     >
-                      <div style={{ fontWeight: 900 }}>{(s.template || "html") + " • " + s.id.slice(0, 7)}</div>
+                      <div style={{ fontWeight: 900 }}>
+                        {(s.template || "html") + " • " + s.id.slice(0, 7)}
+                      </div>
                       <div style={{ opacity: 0.85, fontSize: 12 }}>
-                        Last updated: {stamp ? new Date(stamp).toLocaleString() : ""}
+                        Last updated:{" "}
+                        {stamp ? new Date(stamp).toLocaleString() : ""}
                       </div>
                     </button>
 
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                      <button style={primaryBtn} onClick={() => publishSite(s.id)} disabled={isBusy}>
+                      <button
+                        style={primaryBtn}
+                        onClick={() => publishSite(s.id)}
+                        disabled={isBusy}
+                      >
                         {isBusy ? "Publishing…" : "Publish"}
                       </button>
 
                       <button
                         style={secondaryBtn}
-                        onClick={() => router.push(`/domain?siteId=${encodeURIComponent(s.id)}`)}
+                        onClick={() =>
+                          router.push(`/domain?siteId=${encodeURIComponent(s.id)}`)
+                        }
                         disabled={isBusy}
                       >
                         Domain
@@ -677,7 +763,11 @@ export default function BuilderClient() {
                         View
                       </button>
 
-                      <button style={dangerBtn} onClick={() => deleteSite(s.id)} disabled={isBusy}>
+                      <button
+                        style={dangerBtn}
+                        onClick={() => deleteSite(s.id)}
+                        disabled={isBusy}
+                      >
                         Delete
                       </button>
                     </div>
@@ -688,9 +778,12 @@ export default function BuilderClient() {
           </section>
 
           <section style={card}>
-            <div style={{ fontSize: 18, fontWeight: 900 }}>OpenAI Key (required)</div>
+            <div style={{ fontSize: 18, fontWeight: 900 }}>
+              OpenAI Key (required)
+            </div>
             <div style={{ opacity: 0.85, fontSize: 13, marginTop: 6 }}>
-              This field starts blank. Customers must paste their own key before generating.
+              This field starts blank. Customers must paste their own key before
+              generating.
             </div>
             <input
               value={apiKey}
@@ -703,7 +796,10 @@ export default function BuilderClient() {
 
           <section style={card}>
             <div style={{ fontSize: 18, fontWeight: 900 }}>
-              Website Prompt {isDirty ? <span style={{ opacity: 0.85 }}>(unsaved)</span> : null}
+              Website Prompt{" "}
+              {isDirty ? (
+                <span style={{ opacity: 0.85 }}>(unsaved)</span>
+              ) : null}
             </div>
 
             <textarea
@@ -716,7 +812,14 @@ export default function BuilderClient() {
               style={{ ...textarea, marginTop: 10 }}
             />
 
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                flexWrap: "wrap",
+                marginTop: 10,
+              }}
+            >
               <button style={primaryBtn} onClick={() => generateHtml()}>
                 Generate HTML
               </button>
@@ -741,7 +844,8 @@ export default function BuilderClient() {
             {fileUrl || fileName ? (
               <div style={{ marginTop: 10, fontSize: 13, opacity: 0.95 }}>
                 <div>
-                  <b>Last upload:</b> {fileName || "(no name)"} ({fileMime || "unknown"})
+                  <b>Last upload:</b> {fileName || "(no name)"} (
+                  {fileMime || "unknown"})
                 </div>
                 <div style={{ wordBreak: "break-all" }}>
                   <b>URL:</b> {fileUrl || "(none)"}
@@ -750,7 +854,14 @@ export default function BuilderClient() {
             ) : null}
 
             {busy ? (
-              <div style={{ marginTop: 10, padding: 10, borderRadius: 12, background: "rgba(0,0,0,0.25)" }}>
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: 10,
+                  borderRadius: 12,
+                  background: "rgba(0,0,0,0.25)",
+                }}
+              >
                 {busy}
               </div>
             ) : null}
@@ -766,13 +877,17 @@ export default function BuilderClient() {
                 }}
               >
                 <div style={{ fontWeight: 900 }}>Debug</div>
-                <div style={{ whiteSpace: "pre-wrap", fontSize: 12, opacity: 0.95 }}>{debug}</div>
+                <div style={{ whiteSpace: "pre-wrap", fontSize: 12, opacity: 0.95 }}>
+                  {debug}
+                </div>
               </div>
             ) : null}
           </section>
 
           <section style={card}>
-            <div style={{ fontSize: 18, fontWeight: 900 }}>AI Chat (updates prompt)</div>
+            <div style={{ fontSize: 18, fontWeight: 900 }}>
+              AI Chat (updates prompt)
+            </div>
 
             <div style={chatBox}>
               {history.length === 0 ? (
@@ -783,8 +898,12 @@ export default function BuilderClient() {
 
               {history.map((m, idx) => (
                 <div key={idx} style={{ marginTop: 10 }}>
-                  <div style={{ fontWeight: 900 }}>{m.role === "user" ? "You" : "AI"}</div>
-                  <div style={{ opacity: 0.92, whiteSpace: "pre-wrap" }}>{m.content}</div>
+                  <div style={{ fontWeight: 900 }}>
+                    {m.role === "user" ? "You" : "AI"}
+                  </div>
+                  <div style={{ opacity: 0.92, whiteSpace: "pre-wrap" }}>
+                    {m.content}
+                  </div>
                 </div>
               ))}
             </div>
@@ -944,6 +1063,7 @@ const dangerBtn: React.CSSProperties = {
   fontWeight: 900,
   cursor: "pointer",
 };
+
 
 
 
