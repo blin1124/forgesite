@@ -539,7 +539,7 @@ export default function BuilderClient() {
         <div style={{ ...card, width: "min(720px, 92vw)" }}>
           <div style={{ fontSize: 26, fontWeight: 900 }}>Subscription required</div>
           <div style={{ marginTop: 8, opacity: 0.9 }}>
-            Your account is not unlocked yet. If you just paid, the webhook may need a moment to update your access.
+            Your account isn’t unlocked yet. If you just paid, try again in a few seconds.
           </div>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
@@ -554,24 +554,12 @@ export default function BuilderClient() {
             </button>
           </div>
 
-          <div
-            style={{
-              marginTop: 14,
-              padding: 12,
-              borderRadius: 12,
-              background: "rgba(0,0,0,0.22)",
-              border: "1px solid rgba(255,255,255,0.14)",
-              fontSize: 13,
-              whiteSpace: "pre-wrap",
-            }}
-          >
-            <div style={{ fontWeight: 900, marginBottom: 6 }}>Debug</div>
-            {`Not unlocked yet.
-status=${gateDebug.status ?? "inactive"}
-has_row=${String(gateDebug.has_row ?? false)}
-current_period_end=${String(gateDebug.current_period_end ?? null)}
-error=${gateDebug.error ?? ""}`}
-          </div>
+          {/* ✅ Removed dev/debug block here to keep it clean for customers */}
+          {gateDebug?.error ? (
+            <div style={{ marginTop: 12, opacity: 0.85, fontSize: 13 }}>
+              {String(gateDebug.error).slice(0, 180)}
+            </div>
+          ) : null}
         </div>
       </main>
     );
@@ -956,6 +944,7 @@ const dangerBtn: React.CSSProperties = {
   fontWeight: 900,
   cursor: "pointer",
 };
+
 
 
 
