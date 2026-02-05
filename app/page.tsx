@@ -206,6 +206,18 @@ export default function HomePage() {
     </main>
   );
 }
+<footer
+  style={{
+    marginTop: 60,
+    padding: "20px 16px",
+    textAlign: "center",
+    fontSize: 13,
+    opacity: 0.75,
+    color: "white",
+  }}
+>
+  © 2026 ForgeSite. All rights reserved.
+</footer>
 
 
 
