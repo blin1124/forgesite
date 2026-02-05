@@ -51,6 +51,31 @@ async function resolveUserIdFromSession(
   return null;
 }
 
+/**
+ * ✅ NEW: Ensure we always have a stripe_customer_id mapping for this user.
+ * This is what makes /api/stripe/portal reliable.
+ */
+async function upsertStripeCustomerMapping(params: {
+  supabaseAdmin: ReturnType<typeof getSupabaseAdmin>;
+  userId: string;
+  stripeCustomerId: string;
+  email: string | null;
+}) {
+  const { supabaseAdmin, userId, stripeCustomerId, email } = params;
+
+  await supabaseAdmin
+    .from("stripe_customers")
+    .upsert(
+      {
+        user_id: userId,
+        stripe_customer_id: stripeCustomerId,
+        email,
+        updated_at: new Date().toISOString(),
+      } as any,
+      { onConflict: "user_id" }
+    );
+}
+
 async function upsertEntitlementByUserId(params: {
   supabaseAdmin: ReturnType<typeof getSupabaseAdmin>;
   userId: string;
@@ -137,6 +162,31 @@ export async function POST(req: Request) {
       }
 
       if (userId) {
+        // ✅ NEW: always upsert stripe_customers mapping when we can
+        if (stripeCustomerId) {
+          try {
+            await upsertStripeCustomerMapping({
+              supabaseAdmin,
+              userId,
+              stripeCustomerId,
+              email,
+            });
+          } catch (e: any) {
+            // don't fail entitlement unlock if mapping write fails
+            await supabaseAdmin.from("last_error").insert({
+              scope: "stripe_webhook",
+              message: "Failed to upsert stripe_customers mapping",
+              payload: {
+                userId,
+                stripeCustomerId,
+                email,
+                error: e?.message || String(e),
+              },
+              created_at: new Date().toISOString(),
+            } as any);
+          }
+        }
+
         await upsertEntitlementByUserId({
           supabaseAdmin,
           userId,
@@ -212,5 +262,6 @@ export async function POST(req: Request) {
     );
   }
 }
+
 
 
