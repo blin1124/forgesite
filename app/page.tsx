@@ -1,4 +1,3 @@
-// app/page.tsx
 import Link from "next/link";
 
 export default function HomePage() {
@@ -10,9 +9,12 @@ export default function HomePage() {
           "linear-gradient(135deg, rgb(106, 90, 249), rgb(157, 88, 255), rgb(192, 87, 247))",
         padding: "48px 24px",
         color: "white",
+        display: "flex",
+        flexDirection: "column",
       }}
     >
-      <div style={{ maxWidth: 980, margin: "0 auto" }}>
+      {/* CONTENT */}
+      <div style={{ maxWidth: 980, margin: "0 auto", flex: 1 }}>
         <h1
           style={{
             fontSize: 52,
@@ -48,10 +50,17 @@ export default function HomePage() {
 
           <p style={{ opacity: 0.92, lineHeight: 1.6 }}>
             This product uses a <b>BYOK (Bring Your Own Key)</b> setup. That means you paste your
-            own <b>OpenAI API key</b> so the AI requests run on your OpenAI account.
+            own <b>OpenAI API key</b> so AI requests run on your OpenAI account.
           </p>
 
-          <ul style={{ marginTop: 14, paddingLeft: 18, lineHeight: 1.7, opacity: 0.92 }}>
+          <ul
+            style={{
+              marginTop: 14,
+              paddingLeft: 18,
+              lineHeight: 1.7,
+              opacity: 0.92,
+            }}
+          >
             <li>
               <b>Why you need a key:</b> OpenAI requires an API key to authorize requests.
             </li>
@@ -59,7 +68,7 @@ export default function HomePage() {
               <b>Billing:</b> OpenAI usage is billed by OpenAI to the account that owns the key.
             </li>
             <li>
-              <b>Keep it private:</b> Treat your API key like a password. Don’t share it publicly.
+              <b>Keep it private:</b> Treat your API key like a password.
             </li>
           </ul>
 
@@ -69,9 +78,6 @@ export default function HomePage() {
               target="_blank"
               rel="noreferrer"
               style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 8,
                 padding: "10px 14px",
                 borderRadius: 12,
                 background: "rgba(255,255,255,0.92)",
@@ -83,14 +89,10 @@ export default function HomePage() {
               Get an OpenAI API key →
             </a>
 
-            {/* ✅ THIS IS THE FIX: always go to billing first */}
             <Link
               href="/billing"
               prefetch={false}
               style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 8,
                 padding: "10px 14px",
                 borderRadius: 12,
                 background: "rgba(255,255,255,0.18)",
@@ -104,12 +106,12 @@ export default function HomePage() {
             </Link>
           </div>
 
-          <p style={{ opacity: 0.75, marginTop: 14, fontSize: 13, lineHeight: 1.5 }}>
-            You must subscribe before accessing the Builder. Public share links (/s/&lt;id&gt;) stay public.
+          <p style={{ opacity: 0.75, marginTop: 14, fontSize: 13 }}>
+            You must subscribe before accessing the Builder.
           </p>
         </div>
 
-        {/* Domain instructions */}
+        {/* DOMAIN SECTION */}
         <div
           style={{
             marginTop: 18,
@@ -124,101 +126,30 @@ export default function HomePage() {
           }}
         >
           <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 10 }}>
-            Custom domain (what customers expect)
+            Custom domain support
           </h2>
-          <p style={{ opacity: 0.92, lineHeight: 1.6 }}>
-            When you finish designing your site, you can connect your own domain (like{" "}
-            <b>yourbusiness.com</b>). You’ll buy the domain from a registrar, then connect it inside
-            ForgeSite.
+
+          <p style={{ opacity: 0.92 }}>
+            Connect your own domain like <b>yourbusiness.com</b> after publishing.
           </p>
-
-          <ul style={{ marginTop: 14, paddingLeft: 18, lineHeight: 1.7, opacity: 0.92 }}>
-            <li>
-              <b>Step 1:</b> Buy a domain from GoDaddy, IONOS, Namecheap, etc.
-            </li>
-            <li>
-              <b>Step 2:</b> In ForgeSite, you’ll enter the domain and we’ll show you the DNS
-              records to add.
-            </li>
-            <li>
-              <b>Step 3:</b> DNS can take a little while to update (often minutes, sometimes longer).
-            </li>
-          </ul>
-
-          <div style={{ display: "flex", gap: 12, marginTop: 16, flexWrap: "wrap" }}>
-            <a
-              href="https://www.godaddy.com/domains"
-              target="_blank"
-              rel="noreferrer"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                padding: "10px 14px",
-                borderRadius: 12,
-                background: "rgba(255,255,255,0.18)",
-                border: "1px solid rgba(255,255,255,0.25)",
-                color: "white",
-                fontWeight: 800,
-                textDecoration: "none",
-              }}
-            >
-              Buy on GoDaddy →
-            </a>
-            <a
-              href="https://www.ionos.com/domains"
-              target="_blank"
-              rel="noreferrer"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                padding: "10px 14px",
-                borderRadius: 12,
-                background: "rgba(255,255,255,0.18)",
-                border: "1px solid rgba(255,255,255,0.25)",
-                color: "white",
-                fontWeight: 800,
-                textDecoration: "none",
-              }}
-            >
-              Buy on IONOS →
-            </a>
-            <a
-              href="https://www.namecheap.com/domains/"
-              target="_blank"
-              rel="noreferrer"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                padding: "10px 14px",
-                borderRadius: 12,
-                background: "rgba(255,255,255,0.18)",
-                border: "1px solid rgba(255,255,255,0.25)",
-                color: "white",
-                fontWeight: 800,
-                textDecoration: "none",
-              }}
-            >
-              Buy on Namecheap →
-            </a>
-          </div>
         </div>
       </div>
+
+      {/* FOOTER — MUST BE INSIDE MAIN */}
+      <footer
+        style={{
+          marginTop: 60,
+          padding: "20px 16px",
+          textAlign: "center",
+          fontSize: 13,
+          opacity: 0.75,
+        }}
+      >
+        © 2026 ForgeSite. All rights reserved.
+      </footer>
     </main>
   );
 }
-<footer
-  style={{
-    marginTop: 60,
-    padding: "20px 16px",
-    textAlign: "center",
-    fontSize: 13,
-    opacity: 0.75,
-    color: "white",
-  }}
->
-  © 2026 ForgeSite. All rights reserved.
-</footer>
-
 
 
 
